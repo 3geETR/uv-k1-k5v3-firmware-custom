@@ -81,6 +81,8 @@ _Static_assert(APP_ASSET_OFFSET + APP_ASSET_MAX == APP_CODE_OFFSET,
                "assets must end where the code sector starts");
 _Static_assert(APP_ASSET_MAX <= APP_OVERLAY_MAX,
                "assets are CRC-checked through the overlay buffer");
+_Static_assert(APP_SLOT_BASE(APP_SLOT_COUNT) <= 0x001DE000u,
+               "overlay app slots overlap the Sonic 4K reserve");
 
 enum {
     APP_AVAILABLE_CAPS = 0u

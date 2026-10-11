@@ -32,12 +32,12 @@
  * install apps you trust.
  *
  * External-flash "Apps" region (carved from the free space in the PY25Q16 map,
- * after the multiboot markers, before the RX/TX log):
+ * after the multiboot markers and before the Sonic 4K reserve):
  *
- *   0x102000  slot 0   ]  16 slots x 8 KiB = 128 KiB
+ *   0x102000  slot 0   ]  32 slots x 8 KiB = 256 KiB
  *   0x104000  slot 1   ]  each slot: 4 KiB header sector + 4 KiB code
  *     ...              ]
- *   0x120000  slot 15  ]
+ *   0x140000  slot 31  ]
  *
  * Header sector layout (slot-relative):
  *
@@ -64,7 +64,7 @@
 #define APP_SLOT_STRIDE   0x00002000u   /* 8 KiB per slot                        */
 #define APP_CODE_OFFSET   0x00001000u   /* code starts after the 4 KiB header sector */
 #define APP_SECTOR_SIZE   0x00001000u   /* external NOR erase granularity        */
-#define APP_SLOT_COUNT    16u
+#define APP_SLOT_COUNT    32u
 #define APP_SLOT_BASE(s)  (APP_REGION_BASE + (uint32_t)(s) * APP_SLOT_STRIDE)
 
 /* ---- overlay RAM budget: the PY25Q16 4 KiB sector cache reused as workspace.

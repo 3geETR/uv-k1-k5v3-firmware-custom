@@ -212,16 +212,18 @@ static void app_show_error(const app_header_t *header, uint8_t rc)
 
 _Static_assert(APP_MENU_SLOT_COUNT <= APP_SLOT_COUNT,
                "APP_MENU_SLOT_COUNT exceeds the physical app slot count");
+_Static_assert(APP_MENU_SLOT_COUNT <= 32u,
+               "installed app mask exceeds 32 bits");
 
-static uint16_t app_scan_slots(void)
+static uint32_t app_scan_slots(void)
 {
-    uint16_t installed = 0u;
+    uint32_t installed = 0u;
     for (uint8_t slot = 0; slot < APP_MENU_SLOT_COUNT; slot++)
     {
         app_header_t hdr;
         if (APP_SlotInfo(slot, &hdr) == APP_OK &&
             (hdr.flags & APP_FLAG_COMMITTED))
-            installed |= (uint16_t)((uint16_t)1u << slot);
+            installed |= (uint32_t)1u << slot;
     }
     return installed;
 }
@@ -244,7 +246,7 @@ void APP_MenuOpen(void)
      * shown here as 1..N.  Keep empty slots in the list so their location is
      * visible and selectable while scrolling. */
     uint8_t slot_revision = APP_SlotRevision();
-    uint16_t installed = app_scan_slots();
+    uint32_t installed = app_scan_slots();
 
     /* Remember the physical slot and scrolling window across menu openings. */
     static uint8_t sel = 0;
@@ -286,7 +288,7 @@ void APP_MenuOpen(void)
             number[2] = '\0';
 
             UI_PrintStringSmallNormal(number, 2u, 0, fbLine);
-            if (installed & (uint16_t)((uint16_t)1u << slot))
+            if (installed & ((uint32_t)1u << slot))
             {
                 app_header_t hdr;
                 APP_SlotInfo(slot, &hdr);
@@ -328,7 +330,7 @@ void APP_MenuOpen(void)
                 break;
             case KEY_MENU:
             {
-                if (!(installed & (uint16_t)((uint16_t)1u << sel)))
+                if (!(installed & ((uint32_t)1u << sel)))
                     break;
 
                 app_header_t hdr;
