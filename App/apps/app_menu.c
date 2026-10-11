@@ -206,26 +206,37 @@ static void app_show_error(const app_header_t *header, uint8_t rc)
     app_get_key();   /* blocking: dismiss on any key */
 }
 
-/* Five visible slots; line 0 holds the separator and line 6 the key hints. */
+/* Five visible apps; line 0 holds the separator and line 6 the key hints. */
 #define APP_MENU_ROWS 5u
 #define APP_MENU_SLOT_COUNT APP_SLOT_COUNT
 
 _Static_assert(APP_MENU_SLOT_COUNT <= APP_SLOT_COUNT,
                "APP_MENU_SLOT_COUNT exceeds the physical app slot count");
-_Static_assert(APP_MENU_SLOT_COUNT <= 32u,
-               "installed app mask exceeds 32 bits");
+_Static_assert(APP_MENU_SLOT_COUNT <= UINT8_MAX,
+               "app menu slot indexes exceed uint8_t");
 
-static uint32_t app_scan_slots(void)
+static uint8_t app_scan_slots(uint8_t slots[APP_MENU_SLOT_COUNT])
 {
-    uint32_t installed = 0u;
+    uint8_t count = 0u;
     for (uint8_t slot = 0; slot < APP_MENU_SLOT_COUNT; slot++)
     {
         app_header_t hdr;
         if (APP_SlotInfo(slot, &hdr) == APP_OK &&
             (hdr.flags & APP_FLAG_COMMITTED))
-            installed |= (uint32_t)1u << slot;
+            slots[count++] = slot;
     }
-    return installed;
+    return count;
+}
+
+static uint8_t app_find_slot(const uint8_t slots[APP_MENU_SLOT_COUNT],
+                             uint8_t count, uint8_t slot)
+{
+    for (uint8_t index = 0; index < count; index++)
+    {
+        if (slots[index] == slot)
+            return index;
+    }
+    return count;
 }
 
 void APP_MenuOpen(void)
@@ -242,17 +253,21 @@ void APP_MenuOpen(void)
     gKeyReading1 = KEY_INVALID;
 #endif
 
-    /* Apps are installed from UV Studio (0x073x) into physical slots 0..N-1,
-     * shown here as 1..N.  Keep empty slots in the list so their location is
-     * visible and selectable while scrolling. */
+    /* Apps are installed from UV Studio (0x073x) into physical slots 0..N-1.
+     * The radio is a launcher, so list only committed apps while preserving
+     * their physical slot numbers for diagnostics and host-tool consistency. */
+    uint8_t installed_slots[APP_MENU_SLOT_COUNT];
     uint8_t slot_revision = APP_SlotRevision();
-    uint32_t installed = app_scan_slots();
+    uint8_t installed_count = app_scan_slots(installed_slots);
 
-    /* Remember the physical slot and scrolling window across menu openings. */
-    static uint8_t sel = 0;
-    static uint8_t top = 0;             /* first visible row of the scrolling window */
-    if (sel >= APP_MENU_SLOT_COUNT || top > APP_MENU_SLOT_COUNT - APP_MENU_ROWS)
-        sel = top = 0u;
+    /* Remember the physical slot across menu openings, even when gaps exist. */
+    static uint8_t selected_slot = 0u;
+    uint8_t sel = app_find_slot(installed_slots, installed_count, selected_slot);
+    if (sel >= installed_count)
+        sel = 0u;
+    uint8_t top = sel >= APP_MENU_ROWS ? (uint8_t)(sel - APP_MENU_ROWS + 1u) : 0u;
+    if (installed_count > 0u)
+        selected_slot = installed_slots[sel];
     app_wait_release();
 
     for (;;)
@@ -260,36 +275,60 @@ void APP_MenuOpen(void)
         const uint8_t current_revision = APP_SlotRevision();
         if (current_revision != slot_revision)
         {
-            installed = app_scan_slots();
+            const uint8_t previous_index = sel;
+            const uint8_t previous_slot = installed_count > 0u
+                ? installed_slots[sel]
+                : selected_slot;
+            installed_count = app_scan_slots(installed_slots);
+            sel = app_find_slot(installed_slots, installed_count, previous_slot);
+            if (sel >= installed_count)
+                sel = installed_count == 0u
+                    ? 0u
+                    : (previous_index < installed_count ? previous_index
+                                                        : (uint8_t)(installed_count - 1u));
+            if (installed_count == 0u)
+                top = 0u;
+            else
+            {
+                selected_slot = installed_slots[sel];
+                top = sel >= APP_MENU_ROWS
+                    ? (uint8_t)(sel - APP_MENU_ROWS + 1u)
+                    : 0u;
+            }
             slot_revision = current_revision;
         }
 
         UI_DisplayClear();
         app_status_bar();   /* also wipes the VFO status line (DW, battery, ...) */
 
-        /* Slide [top, top+APP_MENU_ROWS) so it always contains the selection. */
-        if (sel < top)
-            top = sel;
-        else if (sel >= (uint8_t)(top + APP_MENU_ROWS))
-            top = (uint8_t)(sel - APP_MENU_ROWS + 1u);
-
-        for (uint8_t slot = top;
-             slot < APP_MENU_SLOT_COUNT && (uint8_t)(slot - top) < APP_MENU_ROWS;
-             slot++)
+        if (installed_count == 0u)
         {
-            char number[3];
-            char name[14];
-            char size[6];
-            const uint8_t visible_number = (uint8_t)(slot + 1u);
-            const uint8_t fbLine = (uint8_t)(slot - top + 1u);
+		UI_PrintStringSmallNormal("NO APPS", 0, LCD_WIDTH - 1u, 3);
+        }
+        else
+        {
+            /* Slide [top, top+APP_MENU_ROWS) so it contains the selected app. */
+            if (sel < top)
+                top = sel;
+            else if (sel >= (uint8_t)(top + APP_MENU_ROWS))
+                top = (uint8_t)(sel - APP_MENU_ROWS + 1u);
 
-            number[0] = (char)('0' + visible_number / 10u);
-            number[1] = (char)('0' + visible_number % 10u);
-            number[2] = '\0';
-
-            UI_PrintStringSmallNormal(number, 2u, 0, fbLine);
-            if (installed & ((uint32_t)1u << slot))
+            for (uint8_t index = top;
+                 index < installed_count && (uint8_t)(index - top) < APP_MENU_ROWS;
+                 index++)
             {
+                const uint8_t slot = installed_slots[index];
+                const uint8_t visible_number = (uint8_t)(slot + 1u);
+                const uint8_t fbLine = (uint8_t)(index - top + 1u);
+                char number[3];
+                char name[14];
+                char size[6];
+
+                number[0] = (char)('0' + visible_number / 10u);
+                number[1] = (char)('0' + visible_number % 10u);
+                number[2] = '\0';
+
+                UI_PrintStringSmallNormal(number, 2u, 0, fbLine);
                 app_header_t hdr;
                 APP_SlotInfo(slot, &hdr);
                 app_copy(name, sizeof(name), hdr.name, APP_NAME_LEN);
@@ -298,17 +337,13 @@ void APP_MenuOpen(void)
                 GUI_DisplaySmallest(size,
                                     (uint8_t)(LCD_WIDTH - 2u - strlen(size) * 4u),
                                     (uint8_t)(fbLine * 8u + 1u), false, true);
-            }
-            else
-            {
-                UI_PrintStringSmallNormal("Empty", APP_NAME_TEXT_X, 0, fbLine);
-            }
 
-            if (slot == sel)
-                app_invert_name(fbLine);
+                if (index == sel)
+                    app_invert_name(fbLine);
+            }
         }
 
-        UI_DrawMenuKeyHints("RUN", "QUIT");
+        UI_DrawMenuKeyHints(installed_count > 0u ? "RUN" : "", "QUIT");
 
         ST7565_BlitStatusLine();
         ST7565_BlitFullScreen();
@@ -323,19 +358,23 @@ void APP_MenuOpen(void)
         switch (key)
         {
             case KEY_UP:
-                sel = (sel == 0u) ? (uint8_t)(APP_MENU_SLOT_COUNT - 1u) : (uint8_t)(sel - 1u);
+                if (installed_count > 0u)
+                    sel = sel == 0u ? (uint8_t)(installed_count - 1u)
+                                   : (uint8_t)(sel - 1u);
                 break;
             case KEY_DOWN:
-                sel = (uint8_t)((sel + 1u) % APP_MENU_SLOT_COUNT);
+                if (installed_count > 0u)
+                    sel = (uint8_t)((sel + 1u) % installed_count);
                 break;
             case KEY_MENU:
             {
-                if (!(installed & ((uint32_t)1u << sel)))
+                if (installed_count == 0u)
                     break;
 
+                const uint8_t slot = installed_slots[sel];
                 app_header_t hdr;
-                APP_SlotInfo(sel, &hdr);
-                const uint8_t rc = APP_LaunchOverlay(sel);  /* runs until the app exits */
+                APP_SlotInfo(slot, &hdr);
+                const uint8_t rc = APP_LaunchOverlay(slot);  /* runs until the app exits */
                 if (rc != APP_OK)
                     app_show_error(&hdr, rc);               /* no longer silent */
                 app_wait_release();
@@ -347,6 +386,9 @@ void APP_MenuOpen(void)
             default:
                 break;
         }
+
+        if (installed_count > 0u)
+            selected_slot = installed_slots[sel];
     }
 }
 
