@@ -285,13 +285,16 @@ static void draw(void){
     drawFreq(A->rx_freq());
     A->print_tiny(s+T_HELP,0,49,false,true);
 }
-/* The current view to the LCD: the picture (whole screen) or the info screen. */
+/* The picture to the display buffers (whole screen, status line included). */
+static void picture(void){
+    const app_api_t *A=g.A;
+    memcpy(A->status_line,g.img,128);
+    memcpy(A->fb[0],g.img+128,896);
+}
+/* The current view to the LCD: the picture or the info screen. */
 static void show(void){
     const app_api_t *A=g.A;
-    if(g.image){
-        memcpy(A->status_line,g.img,128);
-        memcpy(A->fb[0],g.img+128,896);
-    } else draw();
+    if(g.image) picture(); else draw();
     A->blit_status();
     A->blit_full();
 }
@@ -655,7 +658,7 @@ __attribute__((section(".text.entry"),used))
 void app_main(const app_api_t *api){
     uint8_t img[1024];           /* on the stack: the 4 KiB overlay also holds .bss */
     uint16_t acc[128], lbuf[128];
-    uint8_t c[3];
+    uint8_t c[4];
     g.A=api;
     g.img=img;
     g.acc=acc;
@@ -668,10 +671,18 @@ void app_main(const app_api_t *api){
     g.savedRcc=RCC_APBENR1; g.savedDhr=DAC_DHR12R1;
     biasOn();
     api->backlight_on();
-    api->cfg_load(c,3);          /* rendering (erased 0xFF: 1-bit), TX mode, speaker */
+    api->cfg_load(c,4);          /* rendering (erased 0xFF: 1-bit), TX mode, speaker,
+                                    mode of the saved picture */
     g.mode=c[0]?1u:0u;
     if(c[1]<MODE_COUNT) g.txMode=c[1];
     g.spk=(uint8_t)(c[2]==1u);   /* erased (0xFF): off */
+    /* The last picture, saved by the loader when the app returned (see the
+     * end of app_main). A blank block is no picture: the packaged one, also
+     * back after an update of the app. */
+    api->asset_read(PIC,img,PIC_LEN);
+    uint8_t any=0;
+    for(unsigned i=0;i<PIC_LEN;i++) any|=img[i];
+    if(any && c[3]<MODE_COUNT){ g.rxMode=c[3]; g.have=1; g.status=ST_OK; }
     /* Speaker amplifier (PA8) as saved, off by default: PA4 joins the audio
      * before the amplifier (APRS RX), so the decoder only needs the BK4829 AF
      * output. Key 3 toggles it. */
@@ -688,6 +699,11 @@ void app_main(const app_api_t *api){
     biasOff();
     api->set_af(APP_AF_MUTE);
     api->audio_path(false);
-    c[0]=g.mode; c[1]=g.txMode; c[2]=g.spk;
-    api->cfg_save(c,3);
+    /* APP_FLAG_SAVE_SCREEN (build.sh, --save-screen): the loader keeps the
+     * screen left in the display buffers as the PIC asset block. Leave the
+     * picture there, whatever the view was; not blitted, the menu comes next.
+     * Without a picture img still holds the block read at launch. */
+    picture();
+    c[0]=g.mode; c[1]=g.txMode; c[2]=g.spk; c[3]=g.rxMode;
+    api->cfg_save(c,4);
 }
