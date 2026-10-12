@@ -268,6 +268,9 @@ void APP_MenuOpen(void)
     uint8_t top = sel >= APP_MENU_ROWS ? (uint8_t)(sel - APP_MENU_ROWS + 1u) : 0u;
     if (installed_count > 0u)
         selected_slot = installed_slots[sel];
+    /* Right column: the code size, or the version after KEY_STAR. Kept across
+     * menu openings, back to the size at power-on. */
+    static bool show_version = false;
     app_wait_release();
 
     for (;;)
@@ -332,7 +335,13 @@ void APP_MenuOpen(void)
                 app_header_t hdr;
                 APP_SlotInfo(slot, &hdr);
                 app_copy(name, sizeof(name), hdr.name, APP_NAME_LEN);
-                app_format_size(size, hdr.code_size);
+                if (show_version)
+                {   /* "v1.5": as wide as a size, so a long version is cut */
+                    size[0] = 'v';
+                    app_copy(size + 1, sizeof(size) - 1u, hdr.version, APP_VERSION_LEN);
+                }
+                else
+                    app_format_size(size, hdr.code_size);
                 UI_PrintStringSmallNormal(name, APP_NAME_TEXT_X, 0, fbLine);
                 GUI_DisplaySmallest(size,
                                     (uint8_t)(LCD_WIDTH - 2u - strlen(size) * 4u),
@@ -365,6 +374,9 @@ void APP_MenuOpen(void)
             case KEY_DOWN:
                 if (installed_count > 0u)
                     sel = (uint8_t)((sel + 1u) % installed_count);
+                break;
+            case KEY_STAR:
+                show_version = !show_version;
                 break;
             case KEY_MENU:
             {
