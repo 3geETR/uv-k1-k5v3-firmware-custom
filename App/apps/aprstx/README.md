@@ -7,7 +7,7 @@ which is also the test receiver.
 | Step | State |
 |---|---|
 | Frame and bit stream model (`test/tx_model.py`) | **Done**: identical to the RX app's AX.25 reference, decoded by the RX model |
-| Radio app (`aprstx_app.c`) | **v0.1 works on the radio** (2026-09-30); v0.2-v0.7 add and refine the original editor and display; v0.8 introduces APRS Edit; v0.9 moves the complete beacon-profile editor into APRS Edit; v1.0-v1.2 extend comments to five editor lines and 89 characters; v1.3 adds the editable source callsign; v1.4 changes the default comment; v1.5 adds the beacon timer (key 3), not built or radio-tested yet |
+| Radio app (`aprstx_app.c`) | **v0.1 works on the radio** (2026-09-30); v0.2-v0.7 add and refine the original editor and display; v0.8 introduces APRS Edit; v0.9 moves the complete beacon-profile editor into APRS Edit; v1.0-v1.2 extend comments to five editor lines and 89 characters; v1.3 adds the editable source callsign; v1.4 changes the default comment; v1.5 adds the beacon timer (key 3), **works on the radio** (2026-10-13) |
 | On-air test: APRS RX on a second radio, FT3D | **Done** (2026-09-30, v0.1: frames received by a UV-K1 running APRS RX and by the FT3D, first try, default level 66 and twist 0) |
 
 ## Station settings (`gen_assets.py`, then rebuild)

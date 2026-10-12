@@ -12,7 +12,7 @@ boot logo in any of them (key 1).
 | Model: TX schedule, radio channel, integer receiver (`test/model.py`) | **Done** (sweep below) |
 | TX sequence vs the PySSTV reference encoder (Robot36 class) | **Same** VIS and length (36.910 s); 0.8 % of the time differs, at pixel edges (128 vs 320 columns) |
 | Radio app (`sstv_app.c`) | v0.3, 3676 B of the 4 KiB overlay (GCC 13.3.1; last measured before the key remap was final: to be confirmed by the user's build) |
-| Last picture kept across launches | v0.4, **not built or tested**: needs a firmware with `APP_FLAG_SAVE_SCREEN` (older firmware runs the app without keeping the picture). The loader copies the screen left at exit over the `PIC` asset block (the last 1024 B) and updates the asset CRC; an update of the app erases it |
+| Last picture kept across launches | v0.4, **works on the radio** (2026-10-13): needs a firmware with `APP_FLAG_SAVE_SCREEN` (older firmware runs the app without keeping the picture). The loader copies the screen left at exit over the `PIC` asset block (the last 1024 B) and updates the asset CRC; an update of the app erases it |
 | The built app in Unicorn (`test/emu.py`) vs the model | REG_71 writes = the model's tones (Robot 36, Scottie S1, PD120); pictures identical pixel for pixel (Robot 36, Martin M1, Scottie S1, PD120), with the real LCD blit times |
 | On the radios | v0.1 (2026-10-03): a picture starts, then nothing (see below); **v0.2 works** (Robot 36, 2026-10-03); v0.3 (all modes) not tested yet |
 
