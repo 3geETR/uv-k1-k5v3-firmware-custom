@@ -130,7 +130,7 @@ remains available for navigation and operation.
 
 ### Overlay applications and APRS
 
-Labs can store up to 48 applications from the current collection of 23 in
+Labs can store up to 48 applications from the current collection of 24 in
 external Flash. Each app is loaded into a dedicated 4 KiB RAM overlay only
 while it is running, while larger read-only assets such as text, fonts, bitmaps
 and lookup tables remain in external Flash.
@@ -138,7 +138,7 @@ and lookup tables remain in external Flash.
 The current app collection includes:
 
 - radio tools: Broadcast FM, Fox Hunt, Beacon, Beam, Signal Finder and Spectrum3D,
-- digital and signal apps: ACARS RX, APRS RX, APRS TX, APRS DIGI, CW Decode,
+- digital and signal apps: ACARS RX, APRS RX, APRS TX, APRS Edit, APRS DIGI, CW Decode,
   CW Keyer, SSTV and EPIRB 406,
 - diagnostics: System Info,
 - games and demos: Breakout, Cube3D, Minesweeper, Plasma, Rapid Roll, Snake,
@@ -146,8 +146,9 @@ The current app collection includes:
 
 APRS RX receives AX.25 UI frames using Bell 202 AFSK at 1200 baud, displays
 common position formats and Mic-E data, and keeps a five-frame history. APRS TX
-provides an on-radio editor for the source callsign and SSID, digipeater path,
-position, symbol and comment before transmitting a position beacon.
+uses an editable callsign (with boot-message fallback) and transmits a position beacon; its companion
+APRS Edit app edits the callsign, SSID, digipeater path, position, symbol and
+89-character comment.
 APRS DIGI is a deliberately limited `WIDE1-1` fill-in digipeater with
 path-independent duplicate suppression and channel-busy protection.
 
