@@ -23,7 +23,8 @@
  *
  * The BK4829 VRAMP PA-bias byte in REG_36 is stepped across four milliseconds
  * at each edge. The board PA GPIO is enabled before the rise and disabled after
- * the fall. Audio, tone and sub-audio paths remain muted throughout a session.
+ * the fall. TX modulation remains muted throughout a session; the BK4829
+ * alarm-audio route provides a local sidetone without modulating the carrier.
  */
 
 #include <stdbool.h>
@@ -79,11 +80,17 @@ _Static_assert(1200u / WPM_MAX > 2u * RAMP_MS,
 #define REG_RX_FILTER_2    0x2Bu
 #define REG_RX_FILTER_3    0x2Fu
 #define REG_TONE           0x70u
+#define REG_TONE_FREQ      0x71u
 #define REG_RX_LEVEL       0x42u
+#define AF_ALAM              2u
 #define AF_USB               5u
 #define TX_LINK_OFF      0x0000u
 #define TX_LINK_NO_MIC   0xC3FAu
 #define TX_LINK_NO_PA    0xC3F2u
+#define SIDETONE_GAIN        76u
+#define TONE1_CONFIG      (0x8000u | (SIDETONE_GAIN << 8))
+#define AUDIO_GAIN_BASE_MASK 0xFFF0u
+#define AUDIO_DAC_GAIN_MAX     15u
 
 /* These values are already returned by get_key(), but API level 2 only names
  * codes through PTT. They mirror KEY_SIDE2=17 and KEY_SIDE1=18. */
@@ -211,7 +218,21 @@ static uint32_t tunedFrequency(uint32_t frequency)
     return frequency <= 0xFFFFFFFFu - delta ? frequency + delta : 0xFFFFFFFFu;
 }
 
-static void configureCwRx(void)
+static void setAudioGain(uint16_t base, uint8_t gain)
+{
+    A->bk_write(REG_AUDIO_GAIN, (uint16_t)(base | gain));
+}
+
+static void fadeAudioGain(uint16_t base, bool up)
+{
+    for (uint8_t step = 1u; step <= AUDIO_DAC_GAIN_MAX; step++) {
+        const uint8_t gain = up ? step : (uint8_t)(AUDIO_DAC_GAIN_MAX - step);
+        setAudioGain(base, gain);
+        A->delay_ms(1u);
+    }
+}
+
+static void configureCwRx(bool enableAudio)
 {
     uint32_t frequency = calibratedFrequency(tunedFrequency(A->rx_freq()));
     const uint32_t pitch = (uint32_t)A->uidivmod(g.rxPitchHz, 10u);
@@ -233,23 +254,42 @@ static void configureCwRx(void)
     A->bk_write(REG_RX_FILTER_3, 0x9890u);
     A->bk_write(REG_AUDIO_1, 0x9009u);
     A->bk_write(REG_AUDIO_2, 0x31A9u);
-    A->bk_write(REG_AUDIO_GAIN,
-                (uint16_t)((A->bk_read(REG_AUDIO_GAIN) & 0xFFF0u) | 0x000Fu));
     A->bk_write(REG_AUDIO_FILTER, 0u);
     A->bk_write(REG_AFC, A->bk_read(REG_AFC) | 0x0010u);
     A->set_agc(true);
     A->set_af(AF_USB);
+    const uint16_t gainBase = A->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
+    setAudioGain(gainBase, enableAudio ? AUDIO_DAC_GAIN_MAX : 0u);
     /* CW must not use the FM squelch gate: its opening delay clips dits and
      * repeatedly chops the recovered tone at every carrier transition. */
-    A->audio_path(g.speaker);
+    A->audio_path(enableAudio && g.speaker);
 }
 
 static void returnToRx(void)
 {
+    /* Fade the AF DAC before toggling AUDIO_PA_EN, then restore it only after
+     * the USB output and the amplifier have both settled. */
+    uint16_t gainBase = A->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
+    if (g.speaker)
+        fadeAudioGain(gainBase, false);
+    else
+        setAudioGain(gainBase, 0u);
+    A->set_af(AF_USB);
+    A->delay_ms(20u);
+    A->audio_path(false);
+    A->delay_ms(10u);
     A->tx_end();
     g.txReady = false;
     g.hangElapsedMs = 0u;
-    configureCwRx();
+    configureCwRx(false);
+    if (g.speaker) {
+        A->delay_ms(20u);
+        A->audio_path(true);
+        A->delay_ms(20u);
+        fadeAudioGain(gainBase, true);
+    } else {
+        setAudioGain(gainBase, AUDIO_DAC_GAIN_MAX);
+    }
     g.statusRedraw = true;
 }
 
@@ -401,6 +441,16 @@ static void writeBias(uint8_t bias)
     A->bk_write(REG_PA_BIAS, (uint16_t)((uint16_t)bias << 8) | g.paControl);
 }
 
+static uint16_t toneControlWord(uint16_t frequency)
+{
+    return (uint16_t)((frequency * 1353245u + (1u << 16)) >> 17);
+}
+
+static void sidetone(bool on)
+{
+    A->bk_write(REG_TONE_FREQ, on ? toneControlWord(g.rxPitchHz) : 0u);
+}
+
 static void rampUp(void)
 {
     const uint8_t quarter = (uint8_t)(g.paBias >> 2);
@@ -461,6 +511,15 @@ static bool prepareTx(void)
     A->bk_write(REG_TX_LINK, TX_LINK_OFF);
     A->bk_write(REG_TX_LINK, TX_LINK_NO_PA);
     A->delay_ms(PLL_LOCK_MS);
+
+    /* AF_ALAM is the BK4829's local alarm/tone output. Unlike AF_BEEP, it
+     * remains audible while REG_50 keeps the TX modulation path muted. Keep
+     * Tone1 enabled and key it through REG_71; rewriting REG_70 on every Morse
+     * edge produces an audible pop. */
+    A->bk_write(REG_TONE, TONE1_CONFIG);
+    sidetone(false);
+    A->set_af(AF_ALAM);
+    A->audio_path(g.speaker);
     g.txReady = true;
     g.denied = false;
     g.statusRedraw = true;
@@ -476,6 +535,7 @@ static bool keyOn(void)
     }
     if (!g.txReady && !prepareTx())
         return false;
+    sidetone(true);
     rampUp();
     g.keyDown = true;
     g.markMs = 0u;
@@ -486,6 +546,7 @@ static bool keyOn(void)
 static void keyOff(void)
 {
     rampDown();
+    sidetone(false);
     g.keyDown = false;
 }
 
@@ -595,12 +656,10 @@ static bool adjustFrequency(int8_t direction)
         return false;
     }
 
-    if (g.txReady) {
-        A->tx_end();
-        g.txReady = false;
-        g.hangElapsedMs = 0u;
-    }
-    configureCwRx();
+    if (g.txReady)
+        returnToRx();
+    else
+        configureCwRx(true);
     g.denied = false;
     return true;
 }
@@ -611,7 +670,7 @@ static void adjustSetting(uint8_t key, int8_t direction)
     switch (key) {
         case APP_KEY_0:
             g.speaker = !g.speaker;
-            A->audio_path(g.speaker && !g.txReady);
+            A->audio_path(g.speaker);
             break;
         case APP_KEY_1:
             g.mode ^= 1u;
@@ -670,7 +729,7 @@ static void adjustSetting(uint8_t key, int8_t direction)
         if (g.txReady)
             returnToRx();
         else
-            configureCwRx();
+            configureCwRx(true);
     }
     g.redraw = true;
 }
@@ -805,7 +864,7 @@ void app_main(const app_api_t *api)
     resetUiInput();
     loadConfig();
     A->backlight_on();
-    configureCwRx();
+    configureCwRx(true);
     draw();
 
     while (g.running) {

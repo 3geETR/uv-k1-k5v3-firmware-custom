@@ -79,9 +79,10 @@ by default) keeps the synthesizer ready across Morse element gaps, then
 automatically calls `tx_end` and restores reception without requiring `MENU`.
 The overlay then selects the BK4829 USB baseband output and tunes below the
 calibrated RX frequency by the configured receive pitch (700 Hz by default),
-so an incoming A1A carrier is heard at that pitch. When enabled, the speaker
-remains open throughout RX: gating it with the FM squelch clips the start of
-dits and chops the tone at every carrier transition.
+so an incoming A1A carrier is heard at that pitch. The same pitch is used for
+the local TX sidetone. When enabled, the speaker remains open throughout RX:
+gating it with the FM squelch clips the start of dits and chops the tone at
+every carrier transition.
 
 The atomic `tx_set_params` service necessarily enables RF briefly before the
 overlay can remove PA drive. The app then waits for the corrected synthesizer
@@ -92,5 +93,15 @@ spectrally clean on every power band.
 True iambic A/B squeeze keying is not possible through the current single-key
 `get_key` API. The paddle mode supports one paddle at a time, automatic repeat,
 and memory of the opposite paddle when the scanner reports it during an element.
-No sidetone is generated: the existing tone services also feed the TX
-modulation path, which would turn the signal into MCW instead of A1A.
+The TX sidetone follows the approach used by NR7Y's CW implementation: Tone1
+is routed to the BK4829 `AF_ALAM` output while register `0x50` keeps TX
+modulation muted. Morse edges change only the Tone1 frequency control word in
+register `0x71`; writing zero silences the speaker between marks without the
+pop caused by repeatedly changing either the tone-enable or AF-selector
+register. At the end of the semi-break-in delay, the AF DAC gain fades to its
+minimum before the selector moves to USB and the speaker amplifier is disabled.
+After the RX profile is restored, the USB output settles at minimum DAC gain
+before the amplifier is enabled. The gain then rises one DAC code at a time
+instead of jumping directly to full level. The over-the-air signal therefore
+remains A1A rather than MCW. Key `0` controls both receive audio and the TX
+sidetone.
