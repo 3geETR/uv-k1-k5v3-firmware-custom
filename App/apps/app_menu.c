@@ -62,9 +62,18 @@ static void app_invert_name(uint8_t line)
     gFrameBuffer[line][APP_NAME_BOX_END] ^= 0x7Fu;
 }
 
-/* Debounced blocking key read, then wait for release (mirrors mb_get_key). */
+/* UP / DOWN repeat while held: 10 ms units before the first repeat and between
+ * the next ones (the debounce and the redraw add ~45 ms to each). */
+#define APP_KEY_REPEAT_FIRST 40u
+#define APP_KEY_REPEAT_NEXT  5u
+
+/* Debounced blocking key read, then wait for release (mirrors mb_get_key).
+ * UP and DOWN held past the repeat delay are returned without waiting for the
+ * release, again and again: a held key scrolls the list. The release that ends
+ * such a hold returns nothing. */
 static KEY_Code_t app_get_key(void)
 {
+    static bool held;   /* the last key was returned by the repeat delay */
 #if defined(ENABLE_UART) || defined(ENABLE_USB)
     const uint8_t slot_revision = APP_SlotRevision();
 #endif
@@ -107,14 +116,26 @@ static KEY_Code_t app_get_key(void)
             if (KEYBOARD_Poll() == key)
             {
                 BACKLIGHT_TurnOn();
+                uint8_t wait = 0u;       /* 0: no repeat, wait for the release */
+                if (key == KEY_UP || key == KEY_DOWN)
+                    wait = held ? APP_KEY_REPEAT_NEXT : APP_KEY_REPEAT_FIRST;
                 while (KEYBOARD_Poll() != KEY_INVALID)
                 {
                     SYSTEM_DelayMs(10);
                     APP_ModalBacklightTick(false);
+                    if (wait && --wait == 0u)
+                    {
+                        held = true;
+                        return key;
+                    }
                 }
+                if (held)
+                    continue;            /* end of a hold: reset by the idle poll below */
                 return key;
             }
         }
+        else
+            held = false;
         SYSTEM_DelayMs(10);
     }
 }
