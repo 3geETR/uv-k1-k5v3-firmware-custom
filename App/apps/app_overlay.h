@@ -45,7 +45,9 @@
  *   0x040  per-app config staged by cfg_save (16 B)
  *   0x050  name of the app that config belongs to (16 B, reserved up to 0x0FF);
  *          kept with the config when the slot is erased for an update
- *   0x100  read-only assets (API level 2, up to 3840 B, CRC-checked at launch)
+ *   0x100  packaged assets (API level 2, up to 3840 B, CRC-checked at launch);
+ *          normally read-only, except for a validated config-proxy target block
+ *          and for the screen saved at exit (APP_FLAG_SAVE_SCREEN)
  *   0x1000 code (<= 4 KiB, copied into the overlay RAM)
  *
  * Host tooling (APP_SlotErase/Write/Info) touches the external flash only and is
@@ -72,9 +74,10 @@
  * via compile-app.sh; the loader checks each blob's link_vma against it. ---- */
 #define APP_OVERLAY_MAX   0x00001000u   /* 4 KiB                                 */
 
-/* ---- read-only assets, served by api->asset_read (API level 2) ----
+/* ---- packaged assets, served read-only to apps by asset_read (API level 2) ----
  * Literal values so pack_app.py can parse them; checked against the slot
- * geometry by static asserts in app_overlay.c. */
+ * geometry by static asserts in app_overlay.c. A config-proxy editor may stage
+ * one bounded target block; only the resident loader writes it after exit. */
 #define APP_ASSET_OFFSET  0x00000100u   /* assets start in the header sector     */
 #define APP_ASSET_MAX     0x00000F00u   /* up to the end of the header sector    */
 
@@ -84,6 +87,15 @@
 #define APP_FLAG_COMMITTED   0x0001u
 #define APP_FLAG_SCREEN_SAVER 0x0002u
 #define APP_FLAG_EXIT_TO_MAIN 0x0004u   /* leave the Apps menu when the app returns */
+/* Keep the screen the app leaves behind: when it returns, the loader copies the
+ * display buffers (status line, then the 7 frame lines: one 128x64 screen)
+ * over the last APP_SCREEN_SAVE_LEN bytes of its assets and updates asset_crc.
+ * The app reserves that block at the end of its assets, reads it back with
+ * asset_read at the next launch and fills the buffers before it returns (no
+ * blit needed). Firmware older than this flag ignores it: the block then keeps
+ * its packaged content. An app update erases the slot, the saved screen too. */
+#define APP_FLAG_SAVE_SCREEN 0x0008u
+#define APP_SCREEN_SAVE_LEN  1024u
 #define APP_FLAG_SHORTCUT_SHIFT 8u
 #define APP_FLAG_SHORTCUT_MASK  0x0F00u
 #define APP_NAME_LEN      16
@@ -104,6 +116,11 @@
 /* BEAM channel bridge only (beam_prepare/get/save/draw); the app drives the
  * FSK modem itself through bk_read/bk_write. */
 #define APP_CAP_BEAM2         0x00000010u
+/* Configuration proxy (app_config_proxy.h), introduced by firmware v6.2.0:
+ * an editor app rewrites one bounded asset block of another app. Required by
+ * the editor and by its target, whose settings cannot be changed without it;
+ * earlier firmware refuses both with APP_ERR_CAP. */
+#define APP_CAP_CFG_PROXY     0x00000020u
 
 /* Aligned RAM objects; app_overlay.c pins every serialized field offset. */
 typedef struct {
