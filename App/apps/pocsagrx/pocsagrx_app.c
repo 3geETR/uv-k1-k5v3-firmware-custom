@@ -27,21 +27,27 @@
  * as APRS RX does: PA4 held at mid-scale by the MCU DAC, ADC channel 4 at
  * 9.6 kHz, timed from SysTick, continuously. Each sample goes through the
  * demodulator modelled and tested in test/model_rx.py: half-bit box filter,
- * then 5 slicers of two kinds, for the audio path cuts the low frequencies at
- * a corner that is not known: two put back the baseline that high-pass removed
- * (quantized feedback), three flip their level on the pulses left at each
- * change (hysteresis). Each has its DPLL, the sync codeword in either polarity,
- * the BCH check with one bit corrected, and the page assembly. Keep the two in
- * step.
- * Keys and the screen cost sample time, so they are served every 50 ms only
- * while no slicer is inside a batch; the bit clocks are then run over the
- * samples not taken, so the codeword alignment survives. The redraw follows a
- * new page, a key, or every 5 s.
+ * then 3 hysteresis slicers. The audio path cuts the low frequencies, so a
+ * run of equal bits droops back to zero and a slicer comparing the level with
+ * a threshold reads noise there (the first build did, and found nothing): each
+ * slicer flips its level on the pulse a change of bit leaves and holds in
+ * between, at 1/4, 3/8 and 1/2 of the peak. Each has its DPLL, the sync
+ * codeword in either polarity, the BCH check with one bit corrected, and the
+ * page assembly. Keep the two in step.
+ * Keys and the screen cost sample time: they are served every 50 ms while no
+ * slicer is inside a batch, and during the sync codeword of each batch
+ * otherwise (twice a second), where no page bit is lost; the bit clocks are
+ * run over the samples not taken, so the codeword alignment survives. The
+ * redraw follows a new page, a key, or every 5 s. A new page also blinks the
+ * green LED twice (0.4 s): a GPIO write, no sample lost.
+ * A codeword that cannot be corrected does not end a page: its characters are
+ * marked '?' and filled from another slicer's copy when one read them.
  *
  * Keys (UV-K5 and UV-K1): UP/DOWN scroll the text a row when it overflows;
  *   pressed again at either end: the newer / older page · * normal view /
  *   compact view (saved) · 1 speaker on/off (saved, off by default; not gated
- *   by the squelch: the receiver's hiss is heard) · 2 clear · EXIT quit.
+ *   by the squelch: the receiver's hiss is heard) · 2 clear · 3 bottom line:
+ *   level and age of the page / what each slicer reads · EXIT quit.
  * The loader re-runs RADIO_SetupRegisters on exit; the app restores the ADC,
  * PA4, the DAC and its clock itself.
  */
@@ -85,7 +91,13 @@ static inline volatile uint32_t *hw(uint32_t a){
 #define FS             9600u
 #define CYC_PER_SAMPLE (48000000u / FS)            /* 5000 */
 #define HOUSE_EVERY    480u    /* samples between key/screen slots (50 ms)       */
-#define BUSY_MAX       40u     /* serve them anyway after 40 busy slots (2 s)    */
+#define BUSY_MAX       19200u  /* serve a due slot anyway after 2 s of samples
+                                  inside batches                                */
+#define LED_STEP       960u    /* samples per step of the LED blink (100 ms)     */
+#define LED_STEPS      4u      /* a new page: on, off, on, off                   */
+#define SYNC_SLOT      8u      /* a due slot is served while the slicers have read
+                                  less than 8 bits of a sync codeword: 20 ms left,
+                                  no page bit lost                              */
 #define REFRESH_SLOTS  100u    /* 100 housekeeping slots = 5 s (battery, age)    */
 #define REDRAW_ON      1u      /* g.redraw: a key or the periodic refresh        */
 #define REDRAW_FRAME   2u      /* g.redraw: a page, also wakes the backlight     */
@@ -101,7 +113,7 @@ static inline volatile uint32_t *hw(uint32_t a){
 #define PLL_STEP    8192   /* 65536 per bit / 8 samples per bit             */
 #define PLL_CTR     36864  /* transitions pulled to mid-bit + half a sample */
 #define PLL_SHIFT   3      /* 1/8 of the error per transition               */
-#define NSL         5      /* slicers: see SL_K / SL_N                      */
+#define NSL         3      /* slicers: thresholds at 2/8, 3/8, 4/8 of the peak */
 #define DIRTY_WORDS 8u     /* codewords a slicer is not trusted to correct
                               after a bad one                               */
 
@@ -114,6 +126,9 @@ static inline volatile uint32_t *hw(uint32_t a){
 #define HUNT        0xFFu  /* sl_t.word: looking for the sync codeword      */
 #define FUNC_NUMERIC 0u    /* by usage: function 0 numeric, the others text */
 #define MSG_MAX     80u    /* characters kept per page (DAPNET: 80)         */
+#define GAP         0x7Fu  /* a character lost with a bad codeword: shown as
+                              '?', filled from another slicer's copy        */
+#define BAD_RUN     3u     /* bad codewords in a row that end a page        */
 #define HISTORY     5u
 
 typedef struct {
@@ -127,16 +142,13 @@ typedef struct {
 
 /* one slicer: its decision, DPLL, batch decoder, the page being read */
 typedef struct {
-    int32_t  fb, amp;                  /* feedback: restored baseline, mean |r| (both
-                                          Q4); hysteresis: amp = peak of |y|      */
-    int32_t  rprev, phase;             /* last r, DPLL phase (65536/bit)          */
+    int32_t  amp;                      /* peak of |y|                             */
+    int32_t  rprev, phase;             /* last level (+1 / -1), DPLL phase (65536/bit) */
     uint32_t sr;                       /* the last 32 bits, the newest in bit 0   */
     uint32_t inv;                      /* polarity found at the sync codeword     */
     uint32_t ric;
     uint32_t at;                       /* sample the address of the page came at  */
-    uint8_t  k;                        /* feedback: fb follows 1/2^k              */
-    uint8_t  num;                      /* hysteresis: thresholds at num/8 of the peak;
-                                          0 = a feedback slicer                   */
+    uint8_t  num;                      /* thresholds at +/- num/8 of the peak     */
     uint8_t  dirty;                    /* codewords left before a correction is
                                           trusted again                           */
     uint8_t  nb;                       /* bits of the codeword being read         */
@@ -145,6 +157,11 @@ typedef struct {
     uint8_t  has;                      /* an address was read: a page is open     */
     uint8_t  func, len;
     uint8_t  acc, na;                  /* character being assembled, its bits     */
+    uint8_t  taint;                    /* that character lost bits with a bad word */
+    uint8_t  badrun;                   /* bad codewords in a row inside the page  */
+    uint8_t  excuse;                   /* samples were skipped during this sync
+                                          codeword: it is taken as found          */
+    uint16_t ok;                       /* good codewords (key 3 shows them)       */
     char     text[MSG_MAX];
 } sl_t;
 
@@ -160,15 +177,17 @@ static struct {
     uint8_t  refresh;                  /* housekeeping slots since the last redraw */
     uint8_t  top, lim;                 /* first text row shown, its limit         */
     uint16_t nOk;                      /* pages received                          */
-    /* what the decoder sees, shown on the bottom line until a first page: sync
-     * codewords found, codewords good (corrected ones included) and bad, summed
-     * over the slicers, and the signal level of the first slicer */
-    uint16_t nSync, nGood, nBad, lvl;
+    uint8_t  dbg;                      /* key 3: the bottom line shows the counters */
+    uint8_t  led;                      /* steps left of the LED blink             */
+    uint16_t ledCnt;                   /* samples of the current step             */
+    uint16_t nSync;                    /* sync codewords found, all slicers       */
+    uint16_t busyFor;                  /* samples a due slot has waited           */
     uint32_t n;                        /* samples since the launch, those the
                                           housekeeping skipped included           */
     const app_api_t *A;
     char *text;                        /* formatting buffer (app_main's stack)    */
     page_t **history;                  /* newest first; buffers on app_main's stack */
+    sl_t *sl;                          /* the slicers (listen()'s stack), for draw() */
     uint32_t savedSqr3, savedSmpr3;
 } g;
 #define str g.text
@@ -273,50 +292,54 @@ static uint16_t adcRead(void){
     return (uint16_t)(ADC_DR&0x0FFFu);
 }
 
-/* ---- a page from a slicer. The five slicers read the same transmission:
- * each gives the same page, and one that lost a codeword gives it cut short.
- * What tells the same page from another one is not its text (two pages may
- * share theirs, or its beginning) but where it sits: its address codeword
- * came at the same sample, within half a codeword, for every slicer, and two
- * pages are a codeword apart at least. Of the copies the longest is kept. ---- */
+/* ---- a page from a slicer. The three slicers read the same transmission: each
+ * gives the same page. What tells the same page from another one is not its
+ * text (two pages may share theirs, or its beginning) but where it sits: its
+ * address codeword came at the same sample, within half a codeword, for every
+ * slicer, and two pages are a codeword apart at least. The copies are merged:
+ * a character one slicer lost (GAP) is taken from another that read it, and
+ * the longer text extends the shorter. ---- */
 static void closePage(sl_t *m){
     const app_api_t *A=g.A;
     if(!m->has) return;
     m->has=0;
-    unsigned n=m->len;
-    if(m->func==FUNC_NUMERIC) while(n && m->text[n-1u]==' ') n--;   /* padding */
+    const uint8_t *t=(const uint8_t *)m->text;
+    unsigned n=m->len, gaps=0;
+    /* the marks of bad words after the last character were the end of the page
+     * itself; so is the padding of a numeric page */
+    while(n && (t[n-1u]==GAP || (m->func==FUNC_NUMERIC && t[n-1u]==' '))) n--;
+    for(unsigned i=0;i<n;i++) gaps+=t[i]==GAP;
     /* An address alone is dropped: a slicer that slipped a bit reads shifted
      * codewords, which are valid ones as often as not (the code is cyclic),
-     * and they come out as addresses without text. */
-    if(!n) return;
-    uint32_t t=A->ticks_ms();
-    page_t *p=0;
+     * and they come out as addresses without text. So is a copy with more
+     * characters lost than read. */
+    if(!n || 2u*gaps>n) return;
+    g.redraw|=REDRAW_FRAME;
     for(unsigned j=0;j<g.count;j++){
         page_t *q=g.history[j];
         /* |at - at'| < DUP_SAMPLES, in one unsigned compare */
         if(q->ric!=m->ric || q->func!=m->func ||
            (uint32_t)(m->at-q->at+DUP_SAMPLES)>=2u*DUP_SAMPLES) continue;
-        if(n<=q->len) return;              /* the same page, or cut short */
-        p=q;                               /* the whole of a page kept cut short */
-        break;
+        for(unsigned i=0;i<n;i++)
+            if(i>=q->len || (uint8_t)q->text[i]==GAP) q->text[i]=(char)t[i];
+        if(n>q->len) q->len=(uint8_t)n;
+        return;
     }
-    if(!p){
-        p=g.history[HISTORY-1u];
-        for(unsigned k=HISTORY-1u;k;k--) g.history[k]=g.history[k-1u];
-        g.history[0]=p;
-        if(g.count<HISTORY) g.count++;
-        g.nOk++;                           /* wraps after 65535: five digits in its capsule */
-        p->rssi=A->rssi_dbm();             /* capture while the carrier is still up */
-        p->ric=m->ric;
-        p->func=m->func;
-        p->at=m->at;
-        p->t=t;
-        g.cur=0;                           /* show it, from its first row */
-        g.top=0;
-    }
+    page_t *p=g.history[HISTORY-1u];
+    for(unsigned k=HISTORY-1u;k;k--) g.history[k]=g.history[k-1u];
+    g.history[0]=p;
+    if(g.count<HISTORY) g.count++;
+    g.nOk++;                               /* wraps after 65535: five digits in its capsule */
+    p->rssi=A->rssi_dbm();                 /* capture while the carrier is still up */
+    p->ric=m->ric;
+    p->func=m->func;
+    p->at=m->at;
+    p->t=A->ticks_ms();
     p->len=(uint8_t)n;
-    memcpy(p->text,m->text,n);
-    g.redraw|=REDRAW_FRAME;
+    memcpy(p->text,t,n);
+    g.cur=0;                               /* show it, from its first row */
+    g.led=LED_STEPS;                       /* and blink: listen() steps it */
+    g.top=0;
 }
 
 /* number of 1 bits */
@@ -363,11 +386,15 @@ static unsigned fix(uint32_t *pcw){   /* 0 = bad, 1 = it was right, 2 = one bit 
 /* numeric pages: 4 bits per character */
 static const char NUMERIC[16]={'0','1','2','3','4','5','6','7','8','9','*','U',' ','-',')','('};
 
+/* a character of the page being read */
+static void addc(sl_t *m,unsigned ch){
+    if(m->len<MSG_MAX) m->text[m->len++]=(char)ch;
+}
+
 /* ---- one codeword of a batch: an address opens a page, the message words
  * that follow fill it (7-bit characters, or 4-bit ones for a numeric page,
- * least significant bit first, running across the 20-bit fields), anything
- * else closes it. The all-zero word is a valid codeword (address 0, function
- * 0): it is what a slicer stuck on one level reads, so it is refused. ---- */
+ * least significant bit first, running across the 20-bit fields), an idle
+ * word or another address closes it. ---- */
 static void codeword(sl_t *m,uint32_t cw){
     /* A word with 3 wrong bits or more "corrects" into another codeword once
      * in 60: a slicer that just read a bad word is reading garbage, and only
@@ -378,17 +405,37 @@ static void codeword(sl_t *m,uint32_t cw){
         m->dirty--;
         if(good==2u) good=0;
     }
-    if(good) g.nGood++; else g.nBad++;
-    if(!good || !cw || cw==IDLE){ closePage(m); return; }
+    unsigned n=m->func==FUNC_NUMERIC?4u:7u;
+    /* The all-zero and all-one words are valid codewords (address 0, and a
+     * message of 20 ones): they are what a slicer reads on a steady level, in
+     * one polarity or the other, so they are refused as bad ones. */
+    if(!good || cw+1u<2u){
+        /* A bad word inside a page: most likely one of its message words. Its
+         * 20 bits are skipped and the characters they held are marked (GAP),
+         * so what follows stays in place; another slicer may have read them.
+         * Three in a row: the page is over. */
+        if(!m->has) return;
+        if(++m->badrun>=BAD_RUN){ closePage(m); return; }
+        unsigned left=m->na+20u;
+        for(;left>=n;left-=n) addc(m,GAP);
+        m->na=(uint8_t)left;
+        m->acc=0;
+        m->taint=left!=0u;
+        return;
+    }
+    m->ok++;
+    if(cw==IDLE){ closePage(m); return; }
     if(cw>>31){
         if(!m->has) return;
-        unsigned n=m->func==FUNC_NUMERIC?4u:7u;
+        m->badrun=0;
         for(unsigned i=30;i>10u;i--){
             m->acc|=(uint8_t)(((cw>>i)&1u)<<m->na);
             if(++m->na==n){
                 unsigned ch=m->acc;
                 if(n==4u) ch=(uint8_t)NUMERIC[ch];
-                if(ch-32u<95u && m->len<MSG_MAX) m->text[m->len++]=(char)ch;
+                if(m->taint) addc(m,GAP);
+                else if(ch-32u<95u) addc(m,ch);
+                m->taint=0;
                 m->acc=m->na=0;
             }
         }
@@ -400,7 +447,7 @@ static void codeword(sl_t *m,uint32_t cw){
     m->func=(uint8_t)((cw>>11)&3u);
     m->at=g.n;
     m->has=1;
-    m->acc=m->na=m->len=0;
+    m->acc=m->na=m->len=m->taint=m->badrun=0;
 }
 
 /* ---- batch decoder, one bit (1 = the lower frequency). Hunting: the last 32
@@ -418,7 +465,6 @@ static void seqBit(sl_t *m,uint32_t b){
             m->word=0;
             m->nb=0;
             g.nSync++;
-            g.redraw|=REDRAW_ON;          /* the bottom line counts it */
         }
         return;
     }
@@ -426,39 +472,33 @@ static void seqBit(sl_t *m,uint32_t b){
     m->nb=0;
     uint32_t cw=sr^m->inv;
     if(m->word==BATCH_WORDS){
-        if(ones(cw^SYNC)<=SYNC_ERR) m->word=0;
+        /* The keys and the screen are served during a sync codeword, where no
+         * page is lost: a sync that could not be read for that reason
+         * (excuse, set by listen()) is taken as found. */
+        if(ones(cw^SYNC)<=SYNC_ERR || m->excuse) m->word=0;
         else { closePage(m); m->word=HUNT; }
+        m->excuse=0;
         return;
     }
     codeword(m,cw);
     m->word++;
 }
 
-/* ---- slicer, one filtered sample y: the audio high-pass removed the
- * low-passed signal; it is put back from the decided level (quantized
- * feedback), r = y + fb with fb following amp * sign(r), amp the mean of |r|.
- * Then the DPLL: a bit at each phase wrap (mid-bit), sign changes of r pulled
- * to mid-phase. ---- */
-/* Two kinds, by m->num:
- * - feedback (num = 0), as described above: best in noise, corners up to ~300 Hz;
- * - hysteresis: the level flips when y passes +/- num/8 of its peak and holds
- *   in between, whether y droops or not: from 10 Hz to ~1.5 kHz. */
+/* ---- slicer, one filtered sample y: the level r flips when y passes
+ * +/- num/8 of its peak (fast attack, slow decay) and holds in between,
+ * whether y droops or not. The feedback slicers the first builds also ran
+ * (baseline put back from the decisions) read nothing on the radio
+ * (2026-10-13: "ok 0 0 0 32 32", only the 1/4 and 1/2 hysteresis ones) and
+ * were removed; test/model_rx.py still has them ("q"). Then the DPLL: a bit
+ * at each phase wrap (mid-bit), changes of level pulled to mid-phase. ---- */
 static void slice(sl_t *m,int32_t y){
-    int32_t r;
-    if(m->num){
-        int32_t a=y<0?-y:y;
-        if(a>m->amp) m->amp+=(a-m->amp)>>2;
-        else m->amp-=m->amp>>10;
-        int32_t t=(m->amp*m->num)>>3;
-        r=m->rprev;                       /* holds between the thresholds */
-        if(y>t) r=1;
-        else if(y<-t) r=-1;
-    } else {
-        r=(y<<4)+m->fb;
-        int32_t a=r<0?-r:r;
-        m->amp+=(a-m->amp)>>6;
-        m->fb+=((r<0?-m->amp:m->amp)-m->fb)>>m->k;
-    }
+    int32_t a=y<0?-y:y;
+    if(a>m->amp) m->amp+=(a-m->amp)>>2;
+    else m->amp-=m->amp>>10;
+    int32_t t=(m->amp*m->num)>>3;
+    int32_t r=m->rprev;                   /* holds between the thresholds */
+    if(y>t) r=1;
+    else if(y<-t) r=-1;
     m->phase+=PLL_STEP;
     if((r>0)!=(m->rprev>0)) m->phase+=(PLL_CTR-m->phase)>>PLL_SHIFT;
     m->rprev=r;
@@ -510,7 +550,10 @@ static void draw(void){
         for(unsigned i=0;i<p->len;i+=w,rows++){
             unsigned n=p->len-i, r=rows-g.top;       /* wraps above the screen */
             if(n>w) n=w;
-            memcpy(str,p->text+i,n);
+            for(unsigned j=0;j<n;j++){        /* a character no slicer read: '?' */
+                char ch=p->text[i+j];
+                str[j]=(uint8_t)ch==GAP?'?':ch;
+            }
             str[n]='\0';
             if(g.cw){ if(r<4u) A->print_tiny(str,0,(uint8_t)(8u+r*6u),false,true); }
             else if(r<ROWS) A->print_normal(str,0,0,(uint8_t)(1u+r));
@@ -536,7 +579,7 @@ static void draw(void){
      * under an hour, then "03h07" (hours, minutes), as ATIS RX. print_tiny
      * does not clip: "-120dBm  func 3  last 1193h02" is 30 characters of 32. */
     o=str;
-    if(g.count){
+    if(g.count && !g.dbg){
         uint32_t age=A->ticks_ms()-p->t;
         uint32_t mn=sub(&age,60000u);
         o=puti(o,p->rssi); o=put(o,s+T_DBM);
@@ -552,12 +595,13 @@ static void draw(void){
         }
     }
     else {
-        /* no page yet: what the decoder sees, "lvl 512 syn 3 ok 40 bad 8"
-         * (30 characters at most with the values held at 9999, 99, 999, 999) */
-        o=put(o,s+T_LVL);  o=puti(o,cap(g.lvl,9999u));
-        o=put(o,s+T_SYN);  o=puti(o,cap(g.nSync,99u));
-        o=put(o,s+T_OK);   o=puti(o,cap(g.nGood,999u));
-        o=put(o,s+T_BAD);  o=puti(o,cap(g.nBad,999u));
+        /* no page yet, or key 3: what each slicer reads, "syn 3 ok 32 32 32":
+         * sync codewords found by all, then the good codewords of each
+         * (thresholds 1/4, 3/8, 1/2). 21 characters at most, the values held
+         * at 99 and 999. */
+        o=put(o,s+T_SYN); o=puti(o,cap(g.nSync,99u));
+        o=put(o,s+T_OK);
+        for(unsigned k=0;k<NSL;k++){ *o++=' '; o=puti(o,cap(g.sl[k].ok,999u)); }
     }
     *o='\0';
     A->print_tiny(str,0,49,false,true);
@@ -579,7 +623,11 @@ static void handleKeys(void){
         else if((unsigned)(g.cur+d)<g.count){ g.cur=(uint8_t)(g.cur+d); g.top=0; }
     }
     else if(key==APP_KEY_EXIT) g.running=false;
-    else if(key==APP_KEY_2){ g.count=g.cur=0; g.nOk=0; g.top=0; g.nSync=g.nGood=g.nBad=0; }
+    else if(key==APP_KEY_2){
+        g.count=g.cur=0; g.nOk=0; g.top=0; g.nSync=0;
+        for(unsigned k=0;k<NSL;k++) g.sl[k].ok=0;
+    }
+    else if(key==APP_KEY_3) g.dbg^=1u;   /* bottom line: the page's level and age / the counters */
     else if(key==APP_KEY_1) g.spk^=1u;   /* speaker: listen() switches it at the next slot */
     else if(key==APP_KEY_STAR){ g.cw^=CW_COMPACT; g.top=0; }   /* the view (saved on exit) */
 }
@@ -612,14 +660,12 @@ static void listen(void){
     unsigned bi=0;
     memset(sl,0,sizeof sl);
     memset(box,0,sizeof box);
-    /* two feedback slicers (k = 5, 4), three hysteresis ones (1/8, 1/4, 1/2) */
-    static const uint8_t SL_K[NSL]={5,4,0,0,0}, SL_N[NSL]={0,0,1,2,4};
-    for(unsigned k=0;k<NSL;k++){ sl[k].k=SL_K[k]; sl[k].num=SL_N[k]; sl[k].word=HUNT; }
+    for(unsigned k=0;k<NSL;k++){ sl[k].num=(uint8_t)(2u+k); sl[k].word=HUNT; }   /* 2/8, 3/8, 4/8 */
 
+    g.sl=sl;
     adcSelPA4();
     uint32_t next=clkCyc();             /* the first sample at once */
     uint16_t cnt=0;
-    uint8_t busyFor=0;
     g.redraw=REDRAW_ON;
     while(g.running){
         while((int32_t)(clkCyc()-next)<0){}
@@ -633,28 +679,40 @@ static void listen(void){
         box[bi]=x;
         bi=(bi+1u)&3u;
         for(unsigned k=0;k<NSL;k++) slice(&sl[k],sum);
-        if(++cnt<HOUSE_EVERY) continue;
+        /* green LED: two blinks for a new page, a step every 100 ms, ending off */
+        if(++g.ledCnt>=LED_STEP){
+            g.ledCnt=0;
+            if(g.led){ g.led--; A->led(g.led&1u); }
+        }
+        if(cnt<HOUSE_EVERY){ cnt++; continue; }
+        /* A slot (keys, screen: up to ~15 ms) is due. Outside a batch it is
+         * served at once. Inside one it waits for the sync codeword that opens
+         * the next batch: every slicer in a batch must have read less than
+         * SYNC_SLOT bits of it, so the slot fits in what is left and no page
+         * bit is lost; the keys are then read twice a second. After BUSY_MAX
+         * samples of waiting (slicers that disagree) it is served anyway. */
+        bool wait=false;
+        for(unsigned k=0;k<NSL;k++){
+            unsigned w=sl[k].word;
+            if(w!=HUNT && (w!=BATCH_WORDS || sl[k].nb>=SYNC_SLOT)) wait=true;
+        }
+        if(wait && ++g.busyFor<BUSY_MAX) continue;
+        g.busyFor=0;
         cnt=0;
         /* Speaker amplifier as key 1 left it, not gated by the squelch (as
          * EPIRB 406, the other RAW app): the hiss tells the RAW audio is there
-         * and a transmission is heard as it is. Here, ahead of the busy test:
-         * house() is skipped during a batch. */
+         * and a transmission is heard as it is. */
         A->audio_path(g.spk);
-        /* busy: a slicer is inside a batch (0.45 s each, back to back for the
-         * whole transmission) */
-        bool bz=false;
-        for(unsigned k=0;k<NSL;k++) bz|=sl[k].word!=HUNT;
-        if(bz && ++busyFor<BUSY_MAX) continue;
-        busyFor=0;
-        g.lvl=(uint16_t)(sl[0].amp>>4);
         house();
         /* The samples the slot took were not read: the bit clocks run on over
          * them and the missing bits are read as zeros, so a slicer inside a
-         * batch keeps its codeword alignment (model_rx.py, Demod.skip). */
+         * batch keeps its codeword alignment; one inside a sync codeword is
+         * excused for not finding it (model_rx.py, Demod.skip). */
         while((int32_t)(clkCyc()-next)>=0){
             next+=CYC_PER_SAMPLE;
             g.n++;
             for(unsigned k=0;k<NSL;k++){
+                if(sl[k].word==BATCH_WORDS) sl[k].excuse=1;
                 sl[k].phase+=PLL_STEP;
                 if(sl[k].phase>=65536){ sl[k].phase-=65536; seqBit(&sl[k],0); }
             }
@@ -700,5 +758,6 @@ void app_main(const app_api_t *api){
     biasOff(savedDac,savedDhr,savedRcc,savedModer);
     api->set_af(APP_AF_MUTE);
     api->audio_path(false);
+    api->led(false);             /* not left on in the middle of a blink */
     api->cfg_save(&g.cw,2);      /* staged: flash is written only after a change */
 }

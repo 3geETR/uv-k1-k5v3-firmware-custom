@@ -11,7 +11,7 @@ tone to imitate, the RAW durations are the runs of equal bits. Each run is
 rounded from exact bit-edge times so the timing error never accumulates.
 
   flipper_pocsag.py <out_dir> [--freq 433650000] [--baud 1200]
-    -> pocsag_alpha.sub, _numeric, _two, _long, _inverted, _biterr
+    -> pocsag_alpha.sub, _numeric, _two, _long, _same, _inverted, _biterr, _gap
 One transmission per file (about 1.5 s).
 """
 import argparse, os, sys
@@ -63,6 +63,17 @@ def test_bits():
     for k in range(pocsag.PREAMBLE_BITS + 32 + 7, len(e), 64):
         e[k] ^= 1
     out["biterr"] = (e, p)
+    # three wrong bits in the third message codeword of the long page: it
+    # cannot be corrected, by any slicer, and the characters it held (bits 40
+    # to 59 of the text: characters 5 to 8) are shown as '?'
+    b, p = out["long"]
+    e = list(b)
+    words = pocsag.batches(p)
+    k = [i for i, cw in enumerate(words) if cw != pocsag.SYNC and cw != pocsag.IDLE and cw >> 31][2]
+    for d in (3, 11, 20):
+        e[pocsag.PREAMBLE_BITS + 32 * k + d] ^= 1
+    r, f, t = p[0]
+    out["gap"] = (e, [(r, f, t[:5] + "????" + t[9:])])
     return out
 
 
