@@ -1,11 +1,11 @@
-# Sokoban 1.2
+# Sokoban 1.3
 
 A classic push-box puzzle overlay for F4HWN Labs ABI 1 / API 2.
 Twenty-four original, deterministic levels fit a 10x6 board of 8x8-pixel tiles;
 the entire board is visible. No radio reception or transmission is needed.
 
-The startup screen uses the shared arcade logo style, with a push-box illustration,
-BI8SYN credit and version. Press MENU to enter the saved level, or EXIT to quit.
+The startup screen uses the shared arcade logo style, with a push-box illustration
+and a larger bold PRESS MENU prompt that blinks every half second. Press MENU to enter the saved level, or EXIT to quit.
 A held start key must be released before gameplay.
 
 Push every box onto a goal. Boxes cannot be pulled and two boxes cannot be
@@ -40,7 +40,7 @@ restores the radio when the app returns.
 App/apps/sokoban/tests/run.sh
 ```
 
-Output: `build/Apps/Sokoban.app`. Overlay code/data/BSS: 2800 B of 4096 B;
+Output: `build/Apps/Sokoban.app`. Overlay code/data/BSS: 2848 B of 4096 B;
 read-only assets: 1744 B of 3840 B. Assets contain the 24 packed levels and a 1024 B title image.
 No resident firmware or API changes are required.
 

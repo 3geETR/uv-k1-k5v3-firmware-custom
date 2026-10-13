@@ -5,7 +5,7 @@
 #include "sokoban_assets.h"
 void *memset(void *p,int c,size_t n){uint8_t *b=p;while(n--)*b++=c;return p;}
 void *memcpy(void *p,const void *q,size_t n){uint8_t *d=p;const uint8_t *s=q;while(n--)*d++=*s++;return p;}
-static struct {const app_api_t *api;game_t game;uint8_t level,previous;bool confirm,won_pending,wait_release,title;uint32_t confirm_at,repeat_at,won_at;} g;
+static struct {const app_api_t *api;game_t game;uint8_t level,previous;bool confirm,won_pending,wait_release,title,title_on;uint32_t confirm_at,repeat_at,won_at,title_at;} g;
 #define A (g.api)
 static void value(char *p,uint32_t n,unsigned digits){while(digits){p[--digits]='0'+n%10;n/=10;}}
 static bool load(void){
@@ -20,8 +20,7 @@ static void draw(void){
   if(A->asset_read(ART_TITLE,A->status_line,128)!=128 || A->asset_read(ART_TITLE+128,A->fb[0],896)!=896){
    A->display_clear();A->status_clear();A->print_tiny("SOKOBAN",50,4,false,true);
   }
-  A->print_tiny("BI8SYN  V1.2",40,40,false,true);
-  A->print_tiny("PRESS MENU",44,49,false,true);
+  if(g.title_on)A->print_bold("PRESS MENU",0,127,6);
   A->blit_status();A->blit_full();return;
  }
  A->display_clear();A->status_clear();A->print_inverse("SOKOBAN",2,0,true,true,30);
@@ -57,7 +56,7 @@ void app_main(const app_api_t *api){
  memset(&g,0,sizeof g);g.api=api;A->audio_path(false);uint8_t saved;A->cfg_load(&saved,1);g.level=saved<LEVEL_COUNT?saved:0;uint8_t original=g.level;
  A->backlight_on();A->battery_sample();
  if(!load()){A->display_clear();A->print_tiny("LEVEL ASSET ERROR",2,1,false,true);A->blit_full();return;}
- g.title=true;g.previous=A->get_key();draw();uint32_t last_battery=A->ticks_ms();g.repeat_at=last_battery+300;bool running=true;
+ g.title=true;g.title_on=true;g.title_at=A->ticks_ms();g.previous=A->get_key();draw();uint32_t last_battery=A->ticks_ms();g.repeat_at=last_battery+300;bool running=true;
  while(running){
   A->delay_ms(40);uint32_t now=A->ticks_ms();uint8_t key=A->get_key();bool changed=false;
   if(key==APP_KEY_SAVER){g.previous=APP_KEY_INVALID;A->backlight_update();continue;}
@@ -95,6 +94,7 @@ void app_main(const app_api_t *api){
     g.wait_release=key!=APP_KEY_INVALID;changed=true;
    }
   }else g.won_pending=false;
+  if(g.title && now-g.title_at>=500){g.title_at=now;g.title_on=!g.title_on;changed=true;}
   if(now-last_battery>=5000){A->battery_sample();last_battery=now;changed=true;}
   g.previous=key;A->backlight_update();if(changed)draw();
  }
