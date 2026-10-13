@@ -5,12 +5,12 @@
 #include "sokoban_assets.h"
 void *memset(void *p,int c,size_t n){uint8_t *b=p;while(n--)*b++=c;return p;}
 void *memcpy(void *p,const void *q,size_t n){uint8_t *d=p;const uint8_t *s=q;while(n--)*d++=*s++;return p;}
-static struct {const app_api_t *api;game_t game;uint8_t level,previous;bool confirm;uint32_t confirm_at,repeat_at;} g;
+static struct {const app_api_t *api;game_t game;uint8_t level,previous;bool confirm,won_pending,wait_release;uint32_t confirm_at,repeat_at,won_at;} g;
 #define A (g.api)
 static void value(char *p,uint32_t n,unsigned digits){while(digits){p[--digits]='0'+n%10;n/=10;}}
 static bool load(void){
  uint8_t packed[LEVEL_BYTES];if(A->asset_read(LEVELS+g.level*LEVEL_BYTES,packed,sizeof packed)!=sizeof packed)return false;
- memset(&g.game,0,sizeof g.game);g.confirm=false;
+ memset(&g.game,0,sizeof g.game);g.confirm=false;g.won_pending=false;
  for(unsigned i=0;i<CELLS;i++){uint8_t tile=(packed[i/2]>>((i&1)*4))&15;g.game.cell[i]=tile&7;if(tile&PLAYER)g.game.player=i;}
  return true;
 }
@@ -35,7 +35,7 @@ static void draw(void){
  char m[]="00000",p[]="00000";value(m,g.game.moves,5);value(p,g.game.pushes,5);
  A->print_tiny("MOV",86,18,false,true);A->print_tiny(m,86,25,false,true);
  A->print_tiny("PUSH",86,34,false,true);A->print_tiny(p,86,41,false,true);
- if(game_won(&g.game))A->print_tiny("WON MENU:NEXT",2,49,false,true);
+ if(game_won(&g.game))A->print_tiny("WON AUTO:NEXT *UNDO",2,49,false,true);
  else if(g.confirm)A->print_tiny("0 AGAIN TO RESTART",2,49,false,true);
  else A->print_tiny("2/4/6/8 MOVE *UNDO 0RESET 3/9LV",2,49,false,true);
  A->blit_status();A->blit_full();
@@ -55,6 +55,10 @@ void app_main(const app_api_t *api){
   if(key==APP_KEY_WAKE){g.previous=APP_KEY_INVALID;draw();continue;}
   if(g.confirm && now-g.confirm_at>=2000){g.confirm=false;changed=true;}
   bool fresh=key!=g.previous;int dir=direction(key);
+  if(g.wait_release){
+   if(key==APP_KEY_INVALID)g.wait_release=false;
+   else if(key!=APP_KEY_EXIT && key!=APP_KEY_PTT){fresh=false;dir=-1;}
+  }
   if(fresh)g.repeat_at=now+300;
   bool repeat=dir>=0 && !fresh && (int32_t)(now-g.repeat_at)>=0;
   if(repeat)g.repeat_at=now+120;
@@ -68,9 +72,17 @@ void app_main(const app_api_t *api){
     uint8_t old=g.level;
     if(key==APP_KEY_3)g.level=(g.level+LEVEL_COUNT-1)%LEVEL_COUNT;else g.level=(g.level+1)%LEVEL_COUNT;
     if(!load()){g.level=old;break;}
-    changed=true;
+    g.wait_release=key!=APP_KEY_INVALID;changed=true;
    }
   }
+  if(game_won(&g.game)){
+   if(!g.won_pending){g.won_pending=true;g.won_at=now;}
+   if(now-g.won_at>=1500){
+    uint8_t old=g.level;g.level=(g.level+1)%LEVEL_COUNT;
+    if(!load()){g.level=old;break;}
+    g.wait_release=key!=APP_KEY_INVALID;changed=true;
+   }
+  }else g.won_pending=false;
   if(now-last_battery>=5000){A->battery_sample();last_battery=now;changed=true;}
   g.previous=key;A->backlight_update();if(changed)draw();
  }

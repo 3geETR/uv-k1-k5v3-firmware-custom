@@ -1,4 +1,4 @@
-# Sokoban 1.0
+# Sokoban 1.1
 
 A classic push-box puzzle overlay for F4HWN Labs ABI 1 / API 2.
 Twenty-four original, deterministic levels fit a 10x6 board of 8x8-pixel tiles;
@@ -18,6 +18,11 @@ on goals / total boxes, moves and pushes.
 | MENU after winning | Start the next level |
 | EXIT / PTT | Exit; PTT does not transmit |
 
+After winning, the result stays visible for 1.5 seconds before the next level
+loads automatically. MENU skips the wait. Undo during the wait cancels the
+transition; direction keys cannot move the completed board. A key held across
+a level change must be released before it can control the new board.
+
 Undo also works after winning. Changing levels or restarting clears undo.
 The current level is saved on exit through the resident deferred configuration
 service. The board position and counters are not saved. No flash writes occur
@@ -31,7 +36,7 @@ restores the radio when the app returns.
 App/apps/sokoban/tests/run.sh
 ```
 
-Output: `build/Apps/Sokoban.app`. Overlay code/data/BSS: 2416 B of 4096 B;
+Output: `build/Apps/Sokoban.app`. Overlay code/data/BSS: 2632 B of 4096 B;
 read-only assets: 720 B of 3840 B. Assets contain only the 24 packed levels.
 No resident firmware or API changes are required.
 
@@ -39,7 +44,8 @@ No resident firmware or API changes are required.
 legal pushes. Its retained reverse paths provide solutions. Developer tests run
 all 24 solutions through the actual C game engine and verify undo/redo of the
 last 64 moves. ASan/UBSan tests also cover wall/box blocking, board edges, goals,
-undo overflow, input repeat, win/undo/next-level transitions, restart
+undo overflow, input repeat, timed win/undo/next-level transitions, held-key
+isolation, restart
 confirmation/cancellation/timeout, screensaver wake, held entry keys, UI bounds,
 configuration staging/wrapping/invalid values, exit cleanup and asset errors.
 

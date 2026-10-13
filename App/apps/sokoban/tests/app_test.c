@@ -6,6 +6,15 @@
 static uint32_t now;static unsigned frames,saves,scenario;static bool won_seen;static FILE *assets;
 static uint8_t fb[7][128],status[128];
 static uint8_t key(void){
+ if(scenario>=11){
+  if(now==1600)assert(g.level==0 && game_won(&g.game));
+  if(now==1680 && scenario!=12)assert(g.level==1 && !g.game.moves);
+  if(now==40 || now==120)return 6;
+  if(scenario==12 && now==1640)return 14;
+  if(scenario==13 && now>=1480 && now<1880)return 6;
+  if(now==2120)return 13;
+  return 19;
+ }
  if(scenario==4){if(now<200)return 6;if(now==240)return 13;return 19;}
  if(scenario==5){if(now==40 || now==2040)return 0;if(now==2120)return 13;return 19;}
  if(scenario==6){if(now==40)return APP_KEY_SAVER;if(now==120)return APP_KEY_WAKE;if(now==200)return 13;return 19;}
@@ -30,7 +39,7 @@ static void inverse(const char *s,uint8_t x,uint8_t row,bool st,bool fill,uint8_
 static void blit(void){frames++;if(game_won(&g.game))won_seen=true;}
 int main(int argc,char **argv){assert(argc==2);assets=fopen(argv[1],"rb");assert(assets);
  app_api_t api={.fb=fb,.status_line=status,.display_clear=nothing,.status_clear=nothing,.draw_battery=nothing,.battery_sample=nothing,.print_tiny=tiny,.print_inverse=inverse,.blit_full=blit,.blit_status=nothing,.get_key=key,.delay_ms=delay,.ticks_ms=ticks,.cfg_load=cfg_load,.cfg_save=cfg_save,.asset_read=asset,.audio_path=audio,.backlight_on=nothing,.backlight_update=nothing};
- for(scenario=0;scenario<11;scenario++){now=frames=saves=0;won_seen=false;app_main(&api);assert(frames>0);
+ for(scenario=0;scenario<14;scenario++){now=frames=saves=0;won_seen=false;app_main(&api);assert(frames>0);
   if(scenario==0)assert(won_seen && g.level==1 && !g.game.moves && saves==1);
   if(scenario==1)assert(won_seen && g.level==0 && g.game.moves==2 && !saves);
   if(scenario==2)assert(!saves);
@@ -41,6 +50,8 @@ int main(int argc,char **argv){assert(argc==2);assets=fopen(argv[1],"rb");assert
   if(scenario==7)assert(g.level==0 && !g.game.moves && !saves);
   if(scenario==8)assert(g.level==0 && saves==1);
   if(scenario==9 || scenario==10)assert(g.level==0 && !saves);
+  if(scenario==11 || scenario==13)assert(won_seen && g.level==1 && !g.game.moves && saves==1);
+  if(scenario==12)assert(g.level==0 && g.game.moves==1 && !game_won(&g.game) && !saves);
  }
  fclose(assets);puts("app movement, win, undo, levels, reset, repeat, bounds, persistence and asset errors PASS");
 }
