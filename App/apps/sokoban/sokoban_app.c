@@ -5,7 +5,7 @@
 #include "sokoban_assets.h"
 void *memset(void *p,int c,size_t n){uint8_t *b=p;while(n--)*b++=c;return p;}
 void *memcpy(void *p,const void *q,size_t n){uint8_t *d=p;const uint8_t *s=q;while(n--)*d++=*s++;return p;}
-static struct {const app_api_t *api;game_t game;uint8_t level,previous;bool confirm,won_pending,wait_release;uint32_t confirm_at,repeat_at,won_at;} g;
+static struct {const app_api_t *api;game_t game;uint8_t level,previous;bool confirm,won_pending,wait_release,title;uint32_t confirm_at,repeat_at,won_at;} g;
 #define A (g.api)
 static void value(char *p,uint32_t n,unsigned digits){while(digits){p[--digits]='0'+n%10;n/=10;}}
 static bool load(void){
@@ -15,6 +15,15 @@ static bool load(void){
  return true;
 }
 static void draw(void){
+ if(g.title){
+  A->display_clear();A->status_clear();
+  if(A->asset_read(ART_TITLE,A->status_line,128)!=128 || A->asset_read(ART_TITLE+128,A->fb[0],896)!=896){
+   A->display_clear();A->status_clear();A->print_tiny("SOKOBAN",50,4,false,true);
+  }
+  A->print_tiny("BI8SYN  V1.2",40,40,false,true);
+  A->print_tiny("PRESS MENU",44,49,false,true);
+  A->blit_status();A->blit_full();return;
+ }
  A->display_clear();A->status_clear();A->print_inverse("SOKOBAN",2,0,true,true,30);
  char level[]="L01/24";value(level+1,g.level+1,2);value(level+4,LEVEL_COUNT,2);A->print_tiny(level,38,1,true,true);A->draw_battery();
  /* Eight column bytes per 8x8 tile, least significant bit at the top. */
@@ -48,7 +57,7 @@ void app_main(const app_api_t *api){
  memset(&g,0,sizeof g);g.api=api;A->audio_path(false);uint8_t saved;A->cfg_load(&saved,1);g.level=saved<LEVEL_COUNT?saved:0;uint8_t original=g.level;
  A->backlight_on();A->battery_sample();
  if(!load()){A->display_clear();A->print_tiny("LEVEL ASSET ERROR",2,1,false,true);A->blit_full();return;}
- g.previous=A->get_key();draw();uint32_t last_battery=A->ticks_ms();g.repeat_at=last_battery+300;bool running=true;
+ g.title=true;g.previous=A->get_key();draw();uint32_t last_battery=A->ticks_ms();g.repeat_at=last_battery+300;bool running=true;
  while(running){
   A->delay_ms(40);uint32_t now=A->ticks_ms();uint8_t key=A->get_key();bool changed=false;
   if(key==APP_KEY_SAVER){g.previous=APP_KEY_INVALID;A->backlight_update();continue;}
@@ -64,11 +73,14 @@ void app_main(const app_api_t *api){
   if(repeat)g.repeat_at=now+120;
   if(key<APP_KEY_INVALID && (fresh || repeat)){
    if(key==APP_KEY_EXIT || key==APP_KEY_PTT){running=false;break;}
-   if(key!=APP_KEY_0 && g.confirm){g.confirm=false;changed=true;}
-   if(dir>=0 && !game_won(&g.game))changed|=game_move(&g.game,dir);
-   else if(fresh && key==APP_KEY_STAR)changed|=game_undo(&g.game);
-   else if(fresh && key==APP_KEY_0){if(g.confirm){if(!load())break;}else{g.confirm=true;g.confirm_at=now;}changed=true;}
-   else if(fresh && (key==APP_KEY_3 || key==APP_KEY_9 || (key==APP_KEY_MENU && game_won(&g.game)))){
+   if(g.title){
+    if(fresh && key==APP_KEY_MENU){g.title=false;g.wait_release=true;changed=true;}
+   }
+   else if(key!=APP_KEY_0 && g.confirm){g.confirm=false;changed=true;}
+   if(!g.title && dir>=0 && !game_won(&g.game))changed|=game_move(&g.game,dir);
+   else if(!g.title && fresh && key==APP_KEY_STAR)changed|=game_undo(&g.game);
+   else if(!g.title && fresh && key==APP_KEY_0){if(g.confirm){if(!load())break;}else{g.confirm=true;g.confirm_at=now;}changed=true;}
+   else if(!g.title && fresh && (key==APP_KEY_3 || key==APP_KEY_9 || (key==APP_KEY_MENU && game_won(&g.game)))){
     uint8_t old=g.level;
     if(key==APP_KEY_3)g.level=(g.level+LEVEL_COUNT-1)%LEVEL_COUNT;else g.level=(g.level+1)%LEVEL_COUNT;
     if(!load()){g.level=old;break;}
