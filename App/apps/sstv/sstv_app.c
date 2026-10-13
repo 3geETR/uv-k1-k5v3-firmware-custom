@@ -124,6 +124,7 @@ static inline volatile uint32_t *hw(uint32_t a){
 #define VIS_BIT     288    /* 30 ms                                           */
 #define SYNC_WIN    96     /* +-10 ms around the prediction                   */
 #define MISS_MAX    20u    /* periods without a sync: lost                    */
+#define RELOCK      3u     /* periods without a sync: take one anywhere       */
 
 /* ---- a mode (test/modes.py record(), the MODES assets) ---- */
 enum { SEG_SCAN = 0, SEG_ALT = 1 };    /* else a segment code is a REG_71 value */
@@ -542,18 +543,28 @@ static void sample(int32_t adc){
                 if(g.st!=H_LINE) return;
             }
             int32_t err=n-g.pred;
-            if(!g.found && err>=-SYNC_WIN && err<=SYNC_WIN){
-                if(g.prevFound){        /* the period, 1/8 of the error, +-6 % */
-                    int32_t per=g.per+err*2, p0=g.m.per0, lim=p0>>4;
-                    if(per>p0+lim) per=p0+lim;
-                    if(per<p0-lim) per=p0-lim;
-                    g.per=per;
+            if(!g.found){
+                bool in=err>=-SYNC_WIN && err<=SYNC_WIN;
+                if(in){
+                    if(g.prevFound){    /* the period, 1/8 of the error, +-6 % */
+                        int32_t per=g.per+err*2, p0=g.m.per0, lim=p0>>4;
+                        if(per>p0+lim) per=p0+lim;
+                        if(per<p0-lim) per=p0-lim;
+                        g.per=per;
+                    }
+                    g.found=1;
+                    g.miss=0;
                 }
-                g.c=n;
-                g.found=1;
-                g.miss=0;
-                restart();
-                return;
+                /* lock lost (a sender whose first line is not where the VIS
+                 * says, a fade): after RELOCK periods on the prediction a sync
+                 * anywhere restarts the period. It does not count as found:
+                 * only a sync in the window of the next prediction clears
+                 * miss, so noise alone still ends as lost. */
+                if(in || g.miss>=RELOCK){
+                    g.c=n;
+                    restart();
+                    return;
+                }
             }
         }
     scan:;
