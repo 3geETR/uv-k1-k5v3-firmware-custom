@@ -51,6 +51,8 @@ def mode_index(name):
 
 # ------------------------------------------------------------------ TX ------
 
+LEAD_IN = 1000                      # ms of 1900 Hz before the VIS (sstv_app.c)
+
 def vis_events(vis):
     ev = [(1900, 300 * MS), (1200, 10 * MS), (1900, 300 * MS), (1200, 30 * MS)]
     code = M.vis_byte(vis)
@@ -64,6 +66,7 @@ def tx_events(logo, mode=0):
     name, vis, segs, w, periods, pre = M.MODES[mode]
     A, B = M.rows(periods)
     ev = vis_events(vis)
+    ev[0] = (1900, (LEAD_IN + 300) * MS)    # the app's lead-in on the first leader
     if pre:
         ev.append((1200, M.cycles(pre)))
     row, acc = 0, 0
@@ -461,8 +464,8 @@ def main():
     logo = test_logo()
     ev = tx_events(logo, 0)
     total = sum(c for _, c in ev)
-    assert sum(c for _, c in ev[:13]) == 910 * MS
-    assert (total - 910 * MS) == 240 * 150 * MS, total
+    assert sum(c for _, c in ev[:13]) == (LEAD_IN + 910) * MS
+    assert (total - (LEAD_IN + 910) * MS) == 240 * 150 * MS, total
     if names:                       # the given modes through every case
         for n in names:
             for c in CASES:

@@ -89,7 +89,8 @@ path on, mic off, 50 ms settle, level 66), then each tone is started by writing
 REG_71 at its time. REG_71 is written only when the frequency changes, in case
 a write resets the tone phase. The row inversion (one LCD page, ~1.5 ms) and
 the key scan are done in each sync (4.862 ms at least).
-VIS: 1900 Hz 300 ms, 1200 Hz 10 ms, 1900 Hz 300 ms, start bit 1200 Hz 30 ms,
+VIS: 1900 Hz 300 ms (1300 ms from v0.5: 1 s of lead-in, so that a receiver's
+squelch or CTCSS decoder, or a repeater's key-up, does not eat the VIS), 1200 Hz 10 ms, 1900 Hz 300 ms, start bit 1200 Hz 30 ms,
 7 bits LSB first + even parity (1100 Hz = 1, 1300 Hz = 0), stop 1200 Hz 30 ms.
 
 ## RX
@@ -164,6 +165,10 @@ Robot 36:
 | SNR 6 dB | 28 | 915 | -4..5 |
 
 Dither errors are the logo's 1-pixel strokes rendered grey: expected.
+
+At 6 dB the VIS itself is marginal: decoded in 4 of 12 noise seeds without the
+1 s lead-in, 3 of 12 with it (same noise luck). The table above is from before
+the lead-in; with it, the seed of the "SNR 6 dB" case falls on a missed VIS.
 
 ## Test plan
 

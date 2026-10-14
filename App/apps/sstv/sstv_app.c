@@ -112,6 +112,7 @@ static inline volatile uint32_t *hw(uint32_t a){
 #define F2300       23746u
 
 #define MS(x)       ((x) * 48000u)     /* cycles at 48 MHz */
+#define LEAD_IN     1000u  /* ms of 1900 Hz before the VIS: squelch, repeater */
 #define LOGO_ADDR   0x011008u  /* ui/welcome.c LOGO_BITMAP_ADDR: 8 pages x 128 */
 
 /* ---- receiver (test/model.py, samples at 9.6 kHz) ---- */
@@ -370,8 +371,11 @@ static void send(void){
     A->tx_tone(1900);                    /* tone path on, mic off, 50 ms settle */
     g.f=F1900;
     g.next=clkCyc();
-    /* VIS: leader, break, leader, start bit, 7 bits LSB first + parity, stop */
-    tone(F1900,MS(300)); tone(F1200,MS(10)); tone(F1900,MS(300)); tone(F1200,MS(30));
+    /* VIS: leader, break, leader, start bit, 7 bits LSB first + parity, stop.
+     * The first leader is lengthened by LEAD_IN: a receiver's squelch, CTCSS
+     * decoder or a repeater's key-up eats the start of the transmission, and
+     * the VIS has to arrive whole (QSSTV sends an 800 ms header for this) */
+    tone(F1900,MS(LEAD_IN+300u)); tone(F1200,MS(10)); tone(F1900,MS(300)); tone(F1200,MS(30));
     for(unsigned i=0;i<8u;i++) tone(((md.rx.vis>>i)&1u)?F1100:F1300,MS(30));
     tone(F1200,MS(30));
     if(md.pre) tone(F1200,md.pre);
