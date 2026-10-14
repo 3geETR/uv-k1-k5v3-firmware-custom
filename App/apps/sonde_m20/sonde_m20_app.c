@@ -1,5 +1,5 @@
 /* Copyright 2026 — Apache-2.0
- * SONDE M20: decode Meteomodem M20 on the radio (PA4 @ 19.2 kHz, BK4829).
+ * Sonde M20: decode Meteomodem M20 on the radio (PA4 @ 19.2 kHz, BK4829).
  * GPS first, then alt / T / P when available.
  */
 #include <stdint.h>

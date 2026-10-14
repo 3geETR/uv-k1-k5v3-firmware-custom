@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Flipper Zero Sub-GHz RAW files for SONDE M20 bench tests.
+"""Generate Flipper Zero Sub-GHz RAW files for Sonde M20 bench tests.
 
 The files transmit a synthetic CRC-valid M20 frame on 433.650 MHz using the
 Flipper's asynchronous 2-FSK preset. M20 differential Manchester chips are

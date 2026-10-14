@@ -3,11 +3,11 @@
 # the uvk1-uvk5v3 Docker image, run from this app's directory. Everything is
 # derived from the directory name; only APP_NAME — the human label baked into
 # the 64-byte blob header — is per-app. The .app file is named after it (spaces
-# stripped), so "SONDE M20" -> SONDEM20.app.
+# stripped), so "Sonde M20" -> SondeM20.app.
 set -euo pipefail
 
 APP="$(basename "$PWD")"
-APP_NAME="SONDE M20"
+APP_NAME="Sonde M20"
 APP_VER="1.0"
 APP_API_MIN=2
 APP_VMA=${APP_VMA:-0x20000280}      # pinned overlay VMA (Core/py32f071xb.ld)

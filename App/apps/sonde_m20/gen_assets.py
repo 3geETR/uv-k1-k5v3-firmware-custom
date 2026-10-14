@@ -5,7 +5,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 from app_assets import Assets
 
-TITLE = "SONDE M20"
+TITLE = "Sonde M20"
 UI = [
     ("T_TITLE",  TITLE),
     ("T_NOPOS",  "no position"),

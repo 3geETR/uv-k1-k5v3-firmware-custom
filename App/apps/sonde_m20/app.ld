@@ -18,6 +18,6 @@ SECTIONS {
     } > APP
     __app_end = .;
     ASSERT(__app_end <= APP_VMA + APP_LENGTH,
-           "SONDE M20 overlay overflows 4 KiB")
+           "Sonde M20 overlay overflows 4 KiB")
     /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.eh_frame*) *(.comment) *(.note.*) }
 }

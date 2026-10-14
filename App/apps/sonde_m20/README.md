@@ -1,4 +1,4 @@
-# SONDE M20: on-radio Meteomodem M20 decoder
+# Sonde M20: on-radio Meteomodem M20 decoder
 
 Goal: an overlay app that decodes Meteomodem M20 radiosonde frames on the
 UV-K1 / UV-K5 v3 and shows the serial number, GPS position, altitude,
@@ -19,7 +19,7 @@ Status:
 
 1. Set the VFO to the sonde frequency, **FM, wide bandwidth** (e.g. 432.500 MHz
    for a stock M20 on 70 cm).
-2. Launch **SONDE M20**. The speaker is off by default; decoding uses the BK4829
+2. Launch **Sonde M20**. The speaker is off by default; decoding uses the BK4829
    AF output on PA4 either way.
 3. Default front-end attenuator is **27 dB** (A27). If the sonde is very close
    and frames fail, raise ATT further with key `3`. Avoid
@@ -27,7 +27,7 @@ Status:
 
 | Screen | Content |
 |---|---|
-| Status bar | `SONDE M20` title; speaker icon while the speaker is on, temporarily replaced by `F` when the reverse modifier is armed |
+| Status bar | `Sonde M20` title; speaker icon while the speaker is on, temporarily replaced by `F` when the reverse modifier is armed |
 | Fixed line 0 | Serial number in bold (`YMM-n-bnnnn`, same form as auto_rx / SondeHub) |
 | Body | Latitude / longitude; `ALT …m`; `T …C` and pressure in hPa when available |
 | Dotted separator | Line at y=40 |
@@ -103,7 +103,7 @@ python3 -B test/flipper_m20.py test/flipper
 ```
 
 Copy the generated `.sub` files into `subghz/` on the Flipper, tune the radio
-to **433.650 MHz FM wide**, launch SONDE M20, then send one file at a time.
+to **433.650 MHz FM wide**, launch Sonde M20, then send one file at a time.
 The files use the Flipper's asynchronous 2-FSK preset and transmit the M20
 differential Manchester chips directly at 9600 chips/s.
 
@@ -127,7 +127,7 @@ firmware. From the repo root:
 ```
 
 Requires [Docker](https://docs.docker.com/get-docker/). The first run builds the
-`uvk1-uvk5v3` image. The result is `build/Apps/SONDEM20.app` (≤ 4 KiB overlay).
+`uvk1-uvk5v3` image. The result is `build/Apps/SondeM20.app` (≤ 4 KiB overlay).
 
 On Windows use Git Bash, WSL, or any shell that can run the script and talk to
 Docker Desktop — you do **not** need a local ARM GCC for this path.
@@ -145,7 +145,7 @@ then from this directory:
 ```
 
 On Windows, run that from Git Bash or MSYS2 so the script and toolchain agree
-on paths. Copy the produced `SONDEM20.app` into the radio’s Apps slot with your
+on paths. Copy the produced `SondeM20.app` into the radio’s Apps slot with your
 usual flash tool.
 
 **Host tests only** (no cross-compiler):
@@ -157,5 +157,5 @@ test/run_tests.sh
 ## Version
 
 `APP_VER` in `build.sh` is bumped for every build that goes on a radio and is
-stored in the `.app` metadata. The status-bar title stays `SONDE M20`.
+stored in the `.app` metadata. The status-bar title stays `Sonde M20`.
 Current: **v1.0**.
