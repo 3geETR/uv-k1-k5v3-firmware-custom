@@ -1,6 +1,6 @@
 /* Copyright 2026 — Apache-2.0
  * SONDE M20: decode Meteomodem M20 on the radio (PA4 @ 19.2 kHz, BK4829).
- * GPS first, then alt / T / P when available. Key * opens speaker/ATT params.
+ * GPS first, then alt / T / P when available.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -57,14 +57,11 @@ void *memcpy(void *d, const void *s, size_t n)
 #define REG_39 0x39
 #define STEP_10HZ 500
 #define OFF_MAX 10
-/* UI / keypad about every 250 ms so AF sampling keeps its 52 µs budget. */
-#define HOUSE_EVERY 4800u
+/* Keep normal gaps sparse; poll faster only while F awaits its next key. */
+#define KEY_IDLE_EVERY 4800u
+#define KEY_ARMED_EVERY 960u
+#define ARMED_REFRESH_SLOTS 5u
 #define CFG_MAGIC 0x21u
-#define MENU_ROWS 2u
-#define MENU_VAL1 64u
-#define MENU_VAL2 98u
-/* Just after the title capsule (2 + title width + 2 px gap). */
-#define WAIT_CAPS_X (2u + T_TITLE_CHARS * 4u + 2u)
 #define SPK_X 59u
 #define BK_REG_13 0x13
 #define ATT_SETTLE 40
@@ -76,10 +73,10 @@ static struct {
     const app_api_t *A;
     sonde_info_t info;
     uint32_t vfoFreq;
-    uint8_t prevKey, menu, mrow, line;
+    uint8_t prevKey, line;
     app_cfg_t cfg;
     int8_t offSteps;
-    bool running;
+    bool running, fArm;
     int16_t rssi;
     uint16_t nOk;
 } g;
@@ -196,47 +193,25 @@ static void emit(char *buf, char *end)
     g.A->print_normal(buf, 0, 0, g.line++);
 }
 
-static void opt(const char *s, uint8_t x, uint8_t line, bool on)
+static void attCycle(int8_t dir)
 {
-    if (on) g.A->print_bold(s, x, 0, line);
-    else g.A->print_normal(s, x, 0, line);
-}
-
-static void attCycle(void)
-{
-    if (++g.cfg.att >= ATT_COUNT) g.cfg.att = 0;
+    if (dir < 0)
+        g.cfg.att = g.cfg.att ? (uint8_t)(g.cfg.att - 1u) : (uint8_t)(ATT_COUNT - 1u);
+    else if (++g.cfg.att >= ATT_COUNT)
+        g.cfg.att = 0;
     applyAtt();
     g.A->delay_ms(ATT_SETTLE);
 }
 
-static void drawMenu(const char *s)
+static void draw(const char *s)
 {
-    char str[20]; char *o;
-    g.A->print_inverse(s + T_PARAMS, 2, 0, true, true, (uint8_t)(2u + 6u * 4u));
-    g.A->print_normal(">", 0, 0, (uint8_t)(2u + g.mrow));
-    g.A->print_normal(s + T_SPK, 8, 0, 2);
-    opt(s + T_ON, MENU_VAL1, 2, g.cfg.spk);
-    opt(s + T_OFF, MENU_VAL2, 2, !g.cfg.spk);
-    g.A->print_normal(s + T_ATT, 8, 0, 3);
-    o = putAttVal(str, s); *o = '\0';
-    g.A->print_bold(str, MENU_VAL1, 0, 3);
-    g.A->print_tiny(s + T_HINT, 0, 49, false, true);
-}
-
-static void draw(void)
-{
-    char s[UI_SIZE] __attribute__((aligned(4)));
     char str[34]; char *o;
     const sonde_info_t *in = &g.info;
-    g.A->asset_read(0, s, UI_SIZE);
     g.A->display_clear(); g.A->status_clear();
     g.A->draw_battery();
-    if (g.menu) { drawMenu(s); return; }
     g.A->print_inverse(s + T_TITLE, 2, 0, true, true, (uint8_t)(2u + T_TITLE_CHARS * 4u));
-    if (!g.nOk)
-        g.A->print_inverse(s + T_WAIT, WAIT_CAPS_X, 0, true, true,
-                           (uint8_t)(WAIT_CAPS_X + T_WAIT_CHARS * 4u));
-    if (g.cfg.spk) g.A->asset_read(BMP_SPK, g.A->status_line + SPK_X, SPK_W);
+    if (g.fArm) g.A->asset_read(BMP_F, g.A->status_line + SPK_X, BMP_F_LEN);
+    else if (g.cfg.spk) g.A->asset_read(BMP_SPK, g.A->status_line + SPK_X, SPK_W);
     g.line = 1;
 
     if (g.nOk) {
@@ -276,45 +251,39 @@ static void draw(void)
     tiny(str, (uint8_t)(128u - (unsigned)(o - str) * 4u), 49, o);
 }
 
-static void handleKey(uint8_t key)
+static bool handleKey(uint8_t key)
 {
-    if (key == APP_KEY_INVALID || key == g.prevKey) { g.prevKey = key; return; }
+    if (key == APP_KEY_INVALID || key == g.prevKey) { g.prevKey = key; return false; }
     g.prevKey = key;
-    if (g.menu) {
-        int8_t d = g.A->nav_dir(key);
-        if (d) {
-            int8_t r = (int8_t)(g.mrow + d);
-            if (r < 0) r = (int8_t)(MENU_ROWS - 1u);
-            if (r >= (int8_t)MENU_ROWS) r = 0;
-            g.mrow = (uint8_t)r;
-        } else if (key == APP_KEY_STAR) {
-            if (g.mrow == 0) { g.cfg.spk ^= 1u; g.A->audio_path(g.cfg.spk); }
-            else attCycle();
-        } else if (key == APP_KEY_EXIT || key == APP_KEY_MENU) g.menu = 0;
-        return;
+    if (key == APP_KEY_F) {
+        g.fArm = !g.fArm;
+        return true;
     }
+    const bool reverse = g.fArm;
+    g.fArm = false;
     switch (key) {
         case APP_KEY_EXIT: g.running = false; break;
         case APP_KEY_1: g.cfg.spk ^= 1u; g.A->audio_path(g.cfg.spk); break;
-        case APP_KEY_STAR: g.mrow = 0; g.menu = 1; break;
-        case APP_KEY_3: attCycle(); break;
-        case APP_KEY_5: g.offSteps = 0; tune(); break;
-        case APP_KEY_4: case APP_KEY_6: {
-            int8_t n = (int8_t)(g.offSteps + (key == APP_KEY_4 ? -1 : 1));
+        case APP_KEY_2: {
+            int8_t n = (int8_t)(g.offSteps + (reverse ? -1 : 1));
             if (n >= -OFF_MAX && n <= OFF_MAX) { g.offSteps = n; tune(); }
             break; }
+        case APP_KEY_3: attCycle(reverse ? -1 : 1); break;
+        case APP_KEY_4: g.offSteps = 0; tune(); break;
         default: break;
     }
+    return true;
 }
 
 __attribute__((noinline))
-static void listen(const saved_hw_t *saved)
+static void listen(const saved_hw_t *saved, const char *ui)
 {
     decm20_t m20;
     decm20_init(&m20);
     adcSelPA4(saved);
     uint32_t prev = SYST_VAL, cyc = 0, next = 0;
     uint16_t cnt = 0;
+    uint8_t armedRefresh = 0;
     while (g.running) {
         uint32_t v;
         do {
@@ -338,19 +307,27 @@ static void listen(const saved_hw_t *saved)
         }
         /* No UI in ST_DATA: get_key alone exceeds one sample period. */
         if (decm20_busy(&m20)) continue;
-        if (!wantUi && ++cnt < HOUSE_EVERY) continue;
+        uint16_t keyEvery = g.fArm ? KEY_ARMED_EVERY : KEY_IDLE_EVERY;
+        if (!wantUi && ++cnt < keyEvery) continue;
         cnt = 0;
-        g.rssi = g.A->rssi_dbm();
-        handleKey(g.A->get_key());
+        bool fastPoll = g.fArm;
+        bool keyUi = handleKey(g.A->get_key());
         if (!g.running) break;
-        adcRestore(saved);
-        g.A->battery_sample();
-        adcSelPA4(saved);
-        draw();
-        g.A->blit_status();
-        g.A->blit_full();
-        g.A->backlight_on();
-        next = cyc;
+        if (wantUi || keyUi || !fastPoll || ++armedRefresh >= ARMED_REFRESH_SLOTS) {
+            armedRefresh = 0;
+            g.rssi = g.A->rssi_dbm();
+            adcRestore(saved);
+            g.A->battery_sample();
+            adcSelPA4(saved);
+            draw(ui);
+            g.A->blit_status();
+            g.A->blit_full();
+            g.A->backlight_on();
+        }
+        /* Key scans and UI work span sample periods; resume from now. */
+        decm20_rearm(&m20);
+        prev = SYST_VAL;
+        next = cyc + CYC_PER_SAMPLE;
     }
     adcRestore(saved);
 }
@@ -360,7 +337,9 @@ void app_main(const app_api_t *api)
 {
     saved_hw_t saved;
     uint8_t cfg[4];
+    char ui[UI_SIZE] __attribute__((aligned(4)));
     Gdiv = api; g.A = api; g.prevKey = APP_KEY_INVALID;
+    api->asset_read(0, ui, UI_SIZE);
 
     saved.sqr3 = ADC_SQR3; saved.smpr3 = ADC_SMPR3; saved.moder = GPIOA_MODER;
     saved.dac = DAC_CR; saved.rcc = RCC_APBENR1; saved.dhr = DAC_DHR12R1;
@@ -369,6 +348,7 @@ void app_main(const app_api_t *api)
     g.vfoFreq = api->rx_freq();
     api->bk_write(REG_2B, (uint16_t)((api->bk_read(REG_2B) | 0x0700u) & ~0x0007u));
     api->bk_write(REG_73, (uint16_t)(api->bk_read(REG_73) | 0x0010u));
+    uint16_t r13 = api->bk_read(BK_REG_13);
     uint16_t r43 = api->bk_read(REG_43);
     api->bk_write(REG_43, REG_43_M20);
     api->cfg_load(cfg, 4);
@@ -382,8 +362,10 @@ void app_main(const app_api_t *api)
     api->bk_write(REG_47, REG_47_M20);
     api->delay_ms(50);
     g.running = true;
-    listen(&saved);
+    listen(&saved, ui);
     if (g.offSteps) { g.offSteps = 0; tune(); }
+    api->bk_write(BK_REG_13, r13);
+    api->set_agc(true);
     api->bk_write(REG_43, r43);
     biasOff(&saved);
     api->set_af(APP_AF_MUTE);

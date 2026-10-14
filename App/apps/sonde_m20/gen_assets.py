@@ -8,7 +8,6 @@ from app_assets import Assets
 TITLE = "SONDE M20"
 UI = [
     ("T_TITLE",  TITLE),
-    ("T_WAIT",   "WAIT"),
     ("T_NOPOS",  "no position"),
     ("T_ALT",    "ALT "),
     ("T_M",      "m"),
@@ -18,15 +17,10 @@ UI = [
     ("T_FRAME",  "FRAME "),
     ("T_DBM",    "dBm"),
     ("T_KHZ",    "kHz"),
-    ("T_PARAMS", "PARAMS"),
-    ("T_SPK",    "Speaker"),
     ("T_ATT",    "ATT "),
     ("T_DB",     "dB"),
     ("T_BYP",    "BYP"),
     ("T_BYP_PLUS","BYP+"),
-    ("T_ON",     "ON"),
-    ("T_OFF",    "OFF"),
-    ("T_HINT",   "UP/DN *=change EXIT=back"),
 ]
 a = Assets("SONDE_M20")
 ui_size = 0
@@ -36,10 +30,10 @@ for name, s in UI:
     ui_size += len(s) + 1 + pad
 a.const("UI_SIZE", ui_size)
 a.const("T_TITLE_CHARS", len(TITLE))
-a.const("T_WAIT_CHARS", 4)
 SPK = [0x1c, 0x1c, 0x3e, 0x7f, 0x00, 0x22, 0x1c, 0x41, 0x22, 0x1c]
 a.u8("BMP_SPK", SPK)
 a.const("SPK_W", len(SPK))
+a.u8("BMP_F", [0x3e, 0x7f, 0x41, 0x75, 0x75, 0x75, 0x7d, 0x7f, 0x3e])
 a.u16("ATT_REG13", [0x03DF, 0x03DD, 0x03DB, 0x03D9, 0x0379, 0x0139])
 a.u8("ATT_DB", [0, 6, 15, 27])
 a.const("ATT_COUNT", 6)

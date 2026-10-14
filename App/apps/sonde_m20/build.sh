@@ -8,7 +8,7 @@ set -euo pipefail
 
 APP="$(basename "$PWD")"
 APP_NAME="SONDE M20"
-APP_VER="0.50"
+APP_VER="1.0"
 APP_API_MIN=2
 APP_VMA=${APP_VMA:-0x20000280}      # pinned overlay VMA (Core/py32f071xb.ld)
 OUT="${APP_NAME// /}"

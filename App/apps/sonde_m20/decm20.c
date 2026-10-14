@@ -95,6 +95,8 @@ static uint16_t softWord(const int16_t *ch, uint8_t base, uint8_t *prev_out)
 static void putBit(decm20_t *d, uint8_t bit)
 {
     if (d->nbit >= d->needBits) return;
+    /* Clear each body byte when its first bit arrives instead of pausing at lock. */
+    if (!(d->nbit & 7u)) d->frm[d->nbit >> 3] = 0;
     if (bit) d->frm[d->nbit >> 3] |= (uint8_t)(1u << (7u - (d->nbit & 7u)));
     d->nbit++;
 }
@@ -102,7 +104,7 @@ static void putBit(decm20_t *d, uint8_t bit)
 static void emitChip(decm20_t *d, int16_t soft)
 {
     if (d->state == ST_SRCH) {
-        uint8_t prev, i;
+        uint8_t prev;
         uint16_t w;
         d->chips[d->cpos] = soft;
         d->cpos = (uint8_t)((d->cpos + 1u) & CHIP_MSK);
@@ -113,7 +115,6 @@ static void emitChip(decm20_t *d, int16_t soft)
         d->inv = (uint8_t)(w >> 15);
         w &= 0x7FFFu;
         if (w != 0x4520u && w != 0x4320u) return;
-        for (i = 0; i < M20_FRAME_LEN; i++) d->frm[i] = 0;
         d->frm[0] = (uint8_t)(w >> 8);
         d->frm[1] = 0x20u;
         d->nbit = 16u;
