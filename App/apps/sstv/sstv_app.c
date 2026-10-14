@@ -434,7 +434,9 @@ static void startImage(void){
     memset(g.acc,0,128u*sizeof g.acc[0]);
     memset(g.img,0,1024);
     g.per=g.m.per0;
-    g.miss=0;
+    g.miss=RELOCK;                       /* the first sync is taken anywhere: QSSTV sends
+                                            no sync after the VIS stop bit, its first line
+                                            starts 9 ms early, at the edge of the window */
     g.c=g.pred=g.t0+g.m.first;
     g.found=g.prevFound=0;
     g.st=H_LINE;

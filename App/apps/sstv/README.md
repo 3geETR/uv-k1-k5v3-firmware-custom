@@ -13,7 +13,7 @@ boot logo in any of them (key 1).
 | TX sequence vs the PySSTV reference encoder (Robot36 class) | **Same** VIS and length (36.910 s); 0.8 % of the time differs, at pixel edges (128 vs 320 columns) |
 | Radio app (`sstv_app.c`) | v0.5, 3872 B of the 4 KiB overlay (224 B free; the sync re-acquisition cost 8 B) |
 | Last picture kept across launches | v0.4, **works on the radio** (2026-10-13): needs a firmware with `APP_FLAG_SAVE_SCREEN` (older firmware runs the app without keeping the picture). The loader copies the screen left at exit over the `PIC` asset block (the last 1024 B) and updates the asset CRC; an update of the app erases it |
-| Sync re-acquisition | v0.5 (2026-10-13, issue #647): built, **not tested on the radio**, not run in `emu.py` yet. Model, 25 ms of black between the VIS and the first line: Robot 36 lost at line 21 before, 0 px wrong after (14 modes: 0 px, 17 px in PD50 / PD90) |
+| Sync re-acquisition | v0.5 (2026-10-13, issue #647): **not tested on the radio**, not run in `emu.py` yet. The reporter's QSSTV WAV (Robot 72) through the model, sender clock 0.5 % and 1 % fast: lost at line 20 before, whole picture after. Model, 25 ms of black between the VIS and the first line: Robot 36 lost at line 21 before, 0 px wrong after (14 modes: 0 px, 17 px in PD50 / PD90) |
 | The built app in Unicorn (`test/emu.py`) vs the model | REG_71 writes = the model's tones (Robot 36, Scottie S1, PD120); pictures identical pixel for pixel (Robot 36, Martin M1, Scottie S1, PD120), with the real LCD blit times |
 | On the radios | v0.1 (2026-10-03): a picture starts, then nothing (see below); **v0.2 works** (Robot 36, 2026-10-03); v0.3 (all modes) not tested yet |
 
@@ -116,7 +116,11 @@ ADC channel 4, 9.6 kHz, continuously.
   period (v0.5, issue #647: a sender whose first line is not where the VIS
   says left every sync out of the window, a slanted picture lost after 20
   lines); it does not clear the count, only a sync in the next window does, so
-  noise alone still ends as lost. The period is tracked (1/8 of each error, ±6 %), and the pixel step
+  noise alone still ends as lost. The count starts at 3, so the first sync is
+  taken anywhere too: QSSTV sends no sync pulse after the VIS stop bit, its
+  first line starts 9 ms before the standard position (88 samples early for a
+  window of 96: lost as soon as the sender's clock is 0.5 % faster than the
+  radio's, measured on the reporter's WAV). The period is tracked (1/8 of each error, ±6 %), and the pixel step
   follows it.
 - Pixel: lum = 285 - 256 Σp / Σq over its samples, 0..255, times the scan's
   weight into the line buffer (sum 4). Periods are averaged per screen row,

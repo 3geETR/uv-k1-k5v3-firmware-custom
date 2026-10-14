@@ -292,7 +292,7 @@ class Rx:
                             self.line = self.row = self.racc = self.cnt = 0
                             self.acc = [0] * 128
                             self.per = r["per0"]
-                            self.miss = 0
+                            self.miss = RELOCK    # the first sync: anywhere
                             self.pred = self.c = self.t0 + r["first"]
                             self.found = self.prevFound = False
                             self.errs = []
