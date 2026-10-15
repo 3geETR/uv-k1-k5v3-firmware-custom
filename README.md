@@ -130,19 +130,20 @@ remains available for navigation and operation.
 
 ### Overlay applications and APRS
 
-Labs can store up to 48 applications from the current collection of 24 in
+Labs can store up to 48 applications from the current collection of 30 in
 external Flash. Each app is loaded into a dedicated 4 KiB RAM overlay only
 while it is running, while larger read-only assets such as text, fonts, bitmaps
 and lookup tables remain in external Flash.
 
 The current app collection includes:
 
-- radio tools: Broadcast FM, Fox Hunt, Beacon, Beam, Signal Finder and Spectrum3D,
-- digital and signal apps: ACARS RX, APRS RX, APRS TX, APRS Edit, APRS DIGI, CW Decode,
-  CW Keyer, SSTV and EPIRB 406,
-- diagnostics: System Info,
+- radio tools: Broadcast FM, Fox Hunt, Beacon, Beam, Signal Finder, Spectrum3D
+  and ToneCall,
+- digital and signal apps: ACARS RX, ATIS RX, APRS RX, APRS TX, APRS Edit,
+  APRS DIGI, CW Decode, CW Keyer, SSTV, POCSAG RX, Sonde M20 and EPIRB 406,
+- diagnostics: System Info and Flash Map,
 - games and demos: Breakout, Cube3D, Minesweeper, Plasma, Rapid Roll, Snake,
-  Space Impact and Tetris.
+  Sokoban, Space Impact and Tetris.
 
 APRS RX receives AX.25 UI frames using Bell 202 AFSK at 1200 baud, displays
 common position formats and Mic-E data, and keeps a five-frame history. APRS TX

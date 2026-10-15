@@ -154,7 +154,7 @@ uint8_t MB_SlotWrite(uint8_t slot, uint32_t offset, const uint8_t *data, uint32_
 /*   0x100000  multiboot state A (4 KiB marker)        ] shared               */
 /*   0x101000  multiboot state B (4 KiB marker)        ] redundant            */
 /*   0x102000  overlay apps + expansion reserve                               */
-/*   0x1DE000  Sonic 4K interoperability reserve                              */
+/*   0x1DE000  Sonic 4K interoperability reserve through 0x1FFFFF (136 KiB)    */
 /*                                                                            */
 /* Banks are 64 KiB for headroom; the live config footprint is ~44 KiB (max   */
 /* physical config address 0x00A170). Keep the config banks past the last     */
