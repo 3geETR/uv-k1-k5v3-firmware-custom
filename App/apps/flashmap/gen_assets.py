@@ -39,4 +39,5 @@ a.text("T_FW_MAX", "/118 KB")
 a.table("T_UNIT", [" code", " assets"])
 
 a.table("T_DUMP_MODE", ["HEX", "TEXT"])
+a.u8("BMP_F", [0x3e, 0x7f, 0x41, 0x75, 0x75, 0x75, 0x7d, 0x7f, 0x3e])
 a.main()

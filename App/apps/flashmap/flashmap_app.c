@@ -626,7 +626,7 @@ static void draw_status(void)
     asset_text(T_TITLE, title, T_TITLE_LEN);
     A->print_inverse(title, 2u, 0u, true, true, 38u);
     if (g.function_armed)
-        A->print_tiny("F", 42u, 1u, true, true);
+        A->asset_read(BMP_F, A->status_line + 70u, BMP_F_LEN);
     A->draw_battery();
     A->blit_status();
 }
