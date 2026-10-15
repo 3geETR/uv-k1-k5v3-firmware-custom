@@ -10,7 +10,7 @@ The main use is **Canal E**, the Alpine emergency channel (161.300 MHz, simplex,
 
 ## Using it
 
-1. Tune the channel the call goes on, with its CTCSS/DCS (123 Hz for Canal E).
+1. Tune the channel the call goes on, with its TX CTCSS/DCS (123 Hz for Canal E).
 2. Open ToneCall (`F` + `7`, pick its slot), or with a side key set to `TONE CALL` (see below).
 3. `UP`/`DOWN` (UV-K5 V3) or `LEFT`/`RIGHT` (UV-K1) selects a preset; `MENU` or `PTT` sends it.
 
@@ -26,9 +26,9 @@ The arrow keys follow the radio: `UP` / `DOWN` on the UV-K5 V3, `LEFT` / `RIGHT`
 | Listen | `UP` / `DOWN` (UV-K1: `LEFT` / `RIGHT`) | Back to the list |
 | Listen | `EXIT` | Quit, back to the channel |
 
-The list shows the TX frequency on top, with the channel's TX tone on the right (`CT123.0`, or `D023N` / `D023I` for DCS) when it has one, then the 4 presets (number, type, code) with the selected one highlighted. The last preset used is selected at the next launch.
+The list shows the TX frequency on top, with the channel's TX tone on the right (`CT123.0`, or `D023N` / `D023I` for DCS) when it has one, then the 4 presets (number, type, code) with the selected one highlighted. The last selected preset, whether sent or not, is restored at the next launch.
 
-A call keys up with the channel's normal TX settings (frequency, power, CTCSS/DCS), leaves 300 ms of carrier, sends the tones with no gap and unkeys. The app then stays in RX on the same channel with the speaker following the squelch, so the station's acknowledgement is heard ("RX" while the squelch is open). `TX OFF` means the radio refused to transmit (TX lock, band, battery).
+A call keys up with the channel's normal TX settings (frequency, power, CTCSS/DCS), leaves 300 ms of carrier, sends the tones with no gap and unkeys. The app then stays in RX on the same channel with the speaker following the carrier squelch, so the station's acknowledgement is heard ("RX" while the squelch is open). This listen screen does not apply the channel's RX CTCSS/DCS filter: any carrier that opens the squelch is heard. This does not affect the intended Canal E setup, which uses 123.0 Hz on TX and no RX tone. `TX OFF` means the radio refused to transmit (TX lock, band, battery).
 
 ## Launching it from a side key
 
@@ -54,7 +54,7 @@ An overlay app's own config area holds `APP_CONFIG_LOCAL_MAX` (16) bytes. The pr
 
 - A preset is one number below 2^29: `1 + type x 111111110 + index`, where `index = (10^n - 10) / 9 + code` for a code of `n` digits. Length (leading
   zeros included) and digits share the number; `0` is an empty preset. 
-- The 16 bytes are 4 little-endian 32-bit words, one preset each in bits 28:0. The 4 x 3 top bits hold the last preset used (2 bits) and a 10-bit magic; erased flash, or a config from an older ToneCall, reads as 4 empty presets.
+- The 16 bytes are 4 little-endian 32-bit words, one preset each in bits 28:0. The 4 x 3 top bits hold the last selected preset (2 bits) and a 10-bit magic; erased flash, or a config from an older ToneCall, reads as 4 empty presets.
 
 Decoding uses subtractions only (the Cortex-M0+ has no divide instruction and the app links no division). Names are not stored: a free 5-character label would cost 25 bits and halve the preset count.
 

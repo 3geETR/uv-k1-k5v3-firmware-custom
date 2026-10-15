@@ -96,22 +96,26 @@ static bool txTone(char *s){
     app_beam_channel_t ch;
     if(!A->beam_get) return false;
     A->beam_get(&ch);
+    /* beam_get exports the stored RX/TX sides; reverse makes the stored RX
+     * side the effective TX side used by RADIO_SetTxParameters. */
+    const uint8_t type=ch.frequency_reverse?ch.rx_codetype:ch.tx_codetype;
+    const uint8_t code=ch.frequency_reverse?ch.rx_code:ch.tx_code;
     char *o=s;
-    if(ch.tx_codetype==1u && ch.tx_code<CTCSS_COUNT){          /* CTCSS, Hz x 10 */
+    if(type==1u && code<CTCSS_COUNT){                          /* CTCSS, Hz x 10 */
         uint16_t v;
-        A->asset_read((uint16_t)(CTCSS+ch.tx_code*2u),&v,2u);
+        A->asset_read((uint16_t)(CTCSS+code*2u),&v,2u);
         *o++='C'; *o++='T';
         char *e=putu(o,v,2u);                 /* "x.y" at least */
         e[1]='\0'; e[0]=e[-1]; e[-1]='.';
         return true;
     }
-    if((ch.tx_codetype==2u||ch.tx_codetype==3u) && ch.tx_code<DCS_COUNT){   /* DCS N / I */
+    if((type==2u||type==3u) && code<DCS_COUNT){               /* DCS N / I */
         uint8_t low;
-        A->asset_read((uint16_t)(DCS_LOW+ch.tx_code),&low,1u);
-        const uint16_t v=(uint16_t)(low|(ch.tx_code>=64u?0x100u:0u));
+        A->asset_read((uint16_t)(DCS_LOW+code),&low,1u);
+        const uint16_t v=(uint16_t)(low|(code>=64u?0x100u:0u));
         *o++='D';
         *o++=(char)('0'+((v>>6)&7u)); *o++=(char)('0'+((v>>3)&7u)); *o++=(char)('0'+(v&7u));
-        *o++=ch.tx_codetype==2u?'N':'I'; *o='\0';
+        *o++=type==2u?'N':'I'; *o='\0';
         return true;
     }
     return false;
@@ -210,7 +214,7 @@ static bool sendCall(void){
     for(uint8_t k=0;k<n;k++) A->play_tone_raw(tones[k],ms);   /* unmute, tone, mute */
     A->bk_write(REG_70,0u);
     A->bk_write(REG_30,REG_30_IDLE);
-    A->tx_mute(false);
+    A->tx_mute(true);
     A->tx_end();                        /* PA off + RX registers restored     */
     A->led(false);
     return true;
