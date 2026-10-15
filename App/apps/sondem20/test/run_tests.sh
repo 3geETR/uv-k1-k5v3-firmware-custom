@@ -9,4 +9,4 @@ trap 'rm -rf "$TMP"' EXIT
 echo "decm20 host tests"
 "$CC" -std=c11 -Wall -Wextra -O2 -o "$TMP/host_decm20" "$HERE/host_decm20.c"
 "$TMP/host_decm20"
-echo "sonde_m20 host tests passed"
+echo "sondem20 host tests passed"

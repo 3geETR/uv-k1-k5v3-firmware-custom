@@ -13,7 +13,7 @@ Status:
 | Flipper Zero bench frames | **Generated** (`test/flipper/`), radio validation pending |
 | AF bypass (REG_47 AF=9) required for 9600-chip Manchester | **Done** — stock FM AF low-passes ~3–4 kHz and wipes 1-chip runs |
 | Mid-sample DPLL (2 ADC samples/chip @ 19.2 kHz) | **Done** — needed for real UV-K1 captures (~9620 chip/s) |
-| Radio app (`sonde_m20_app.c`) | **v1.0** decodes a live M20 on a UV-K1 (ID, lat/lon, alt, T, P) |
+| Radio app (`sondem20_app.c`) | **v1.0** decodes a live M20 on a UV-K1 (ID, lat/lon, alt, T, P) |
 
 ## Using the app
 
@@ -123,7 +123,7 @@ Flipper's configured region.
 firmware. From the repo root:
 
 ```bash
-./compile-app.sh sonde_m20
+./compile-app.sh sondem20
 ```
 
 Requires [Docker](https://docs.docker.com/get-docker/). The first run builds the

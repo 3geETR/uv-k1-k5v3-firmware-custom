@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "../app_api.h"
-#include "sonde_m20_assets.h"
+#include "sondem20_assets.h"
 #include "sonde_info.h"
 #include "decm20.c"
 
