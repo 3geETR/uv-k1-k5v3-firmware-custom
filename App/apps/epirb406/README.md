@@ -112,10 +112,19 @@ beacon RF --> BK4829 (RAW: no HPF300 / LPF3K / de-emphasis, AFC off)
 - **Decode beeps**: `prepare_tone` and the speaker on, then five 150 ms
   `play_tone_raw` calls alternating 1536 Hz and 0 Hz (REG_71 = 0: the tone
   generator gives no output, a silent gap for the cost of a beep). Then
-  `tune()` on the same frequency: `tones_off_rx` (REG_70 cleared, REG_30 to 0
-  then RX, the state the firmware leaves after a key beep) and the RX audio
-  again (AF in FM, speaker as set by key 1). The RAW bits in REG_2B / REG_73 are
-  not touched. Tuning (keys 4/5/6) relocks through the same path.
+  `tune()` on the same frequency: speaker amplifier off, `tones_off_rx` (REG_70
+  cleared, REG_30 to 0 then RX, the state the firmware leaves after a key beep)
+  and the RX audio again (AF in FM, speaker as set by key 1). The RAW bits in
+  REG_2B / REG_73 are not touched. Tuning (keys 4/5/6) relocks through the same
+  path.
+- **No click after the beeps**: REG_30 to 0 switches the AF DAC off and back on,
+  a step on the AF output. v2.6 did it with the amplifier still on after the
+  last beep, which gave a loud click. `tune()` now turns the amplifier off
+  first, the order `AUDIO_PlayBeep` uses (amplifier off, tones off and RX,
+  amplifier back only if the speaker is on). The two frequency writes before
+  `tones_off_rx` give the amplifier a head start instead of the firmware's
+  5 ms delay. The `audio_path(false)` on exit went to pay for it: the loader's
+  `RADIO_SetupRegisters` starts with `AUDIO_AudioPathOff()`.
 - **PA4 bias**: the pin has no DC reference; the app holds it at mid-scale with
   the MCU DAC (output buffer off, code 2048) for the whole run. The volume knob is analog; whether it changes the PA4 level
   still has to be checked.
@@ -426,4 +435,4 @@ a real bias reproduced on the host at the measured level.
 
 `APP_VER` in `build.sh` is bumped for every build that goes on a radio and is
 stored in the `.app` metadata. The status-bar title stays simply `EPIRB 406`.
-Current source: **v2.6** (three decode beeps): 4,092 of 4,096 bytes (v2.5, one beep: 4,088; v2.4: 4,072).
+Current source: **v2.7** (amplifier off before the RX return, no click after the beeps): size to be measured, estimated unchanged (v2.6, three decode beeps: 4,092 of 4,096 bytes; v2.5, one beep: 4,088; v2.4: 4,072).

@@ -30,7 +30,7 @@
  * Keys (UV-K5 and UV-K1): UP/DOWN scroll, then select the newer / older message
  *   at an end · * normal / compact view · 4/6 tune -/+5 kHz (up to +/-50 kHz)
  *   · 5 back to the VFO frequency · 1 speaker on/off · MENU clear · EXIT quit.
- * The loader re-runs RADIO_SetupRegisters on exit; the app restores the ADC,
+ * The loader re-runs RADIO_SetupRegisters on exit (amplifier off); the app restores the ADC,
  * PA4, the DAC and its clock itself.
  * Screen texts and protocol names are read-only assets (gen_assets.py, API
  * level 2), kept out of the 4 KiB overlay.
@@ -168,6 +168,10 @@ static void rxAudio(void){ g.A->set_af(APP_AF_FM); g.A->audio_path(g.cfg.spk); }
 
 /* ---- tuning: offset the RX frequency from the VFO (restored by the loader on exit) ---- */
 static void tune(void){
+    /* Amplifier off first, as AUDIO_PlayBeep does: the REG_30 cycle below steps
+     * the AF DAC output, a loud click if amplified. The two frequency writes
+     * give it a head start; rxAudio() turns it back on if the speaker is on. */
+    g.A->audio_path(false);
     uint32_t f=(uint32_t)((int32_t)g.vfoFreq+(int32_t)g.offSteps*STEP_10HZ);
     g.A->bk_write(REG_38,(uint16_t)(f&0xFFFFu));
     g.A->bk_write(REG_39,(uint16_t)(f>>16));
@@ -248,7 +252,7 @@ __attribute__((noinline)) static uint8_t capture(const saved_hw_t *saved){
     /* Decode alert, even with the speaker off: three 150 ms beeps, 150 ms apart.
      * The gaps are 0 Hz "tones" (REG_71 = 0, no output): the same call as a beep,
      * cheaper than a delay. The burst is over and the next one is ~50 s away.
-     * tune() then brings RX, the AF and the speaker back. */
+     * tune() then cuts the amplifier and brings RX, the AF and the speaker back. */
     g.A->prepare_tone();
     g.A->audio_path(true);
     for(unsigned hz=BEEP_HZ, n=5u; n; n--, hz^=BEEP_HZ) g.A->play_tone_raw((uint16_t)hz,BEEP_MS);
@@ -458,7 +462,6 @@ void app_main(const app_api_t *api){
     }
 
     biasOff(&saved);             /* the ADC is already restored after each capture */
-    g.A->set_af(APP_AF_MUTE);
-    g.A->audio_path(false);
+    g.A->set_af(APP_AF_MUTE);    /* the loader's RADIO_SetupRegisters turns the amplifier off */
     g.A->cfg_save(&g.cfg.spk,sizeof g.cfg);
 }
