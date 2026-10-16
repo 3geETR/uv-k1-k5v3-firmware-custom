@@ -23,6 +23,11 @@ Status:
 3. The speaker is off by default. Key 1 turns it on if you want to hear the
    bursts; decoding still receives the BK4829 AF signal on PA4 while it is off.
 
+Every decoded message plays a short 1200 Hz beep (150 ms), even with the speaker
+off, so a beacon heard while the radio is in a pocket is not missed. The beep is
+played after the burst, during the 1.5 s re-arm delay, and the next burst of a
+real beacon comes about 50 s later.
+
 Each burst is detected on RSSI (10 dB above the floor), sampled for up to 900 ms
 and decoded. The five latest messages stay in RAM, newest first. A new decode is
 shown immediately from its first detail row. The history is lost on exit.
@@ -104,6 +109,11 @@ beacon RF --> BK4829 (RAW: no HPF300 / LPF3K / de-emphasis, AFC off)
   idle 518, message range 165-894 (about 0.6 V p-p), no clipping.
 - The BK4829 AF output stays enabled because PA4 receives it before the speaker
   amplifier. Key 1 can therefore mute the speaker without stopping decoding.
+- **Decode beep**: `play_tone` (tone mode, speaker on, tone, speaker off), then
+  `tones_off_rx` (REG_70 cleared, REG_30 to 0 then RX, the state the firmware
+  leaves after a key beep) and the RX audio again (AF in FM, speaker as set by
+  key 1). The RAW bits in REG_2B / REG_73 are not touched. Tuning (keys 4/5/6)
+  relocks through the same `tones_off_rx` call.
 - **PA4 bias**: the pin has no DC reference; the app holds it at mid-scale with
   the MCU DAC (output buffer off, code 2048) for the whole run. The volume knob is analog; whether it changes the PA4 level
   still has to be checked.
@@ -414,4 +424,4 @@ a real bias reproduced on the host at the measured level.
 
 `APP_VER` in `build.sh` is bumped for every build that goes on a radio and is
 stored in the `.app` metadata. The status-bar title stays simply `EPIRB 406`.
-Current source: **v2.4**; size to be measured (v2.3: 4,084 of 4,096 bytes).
+Current source: **v2.5** (decode beep): 4,088 of 4,096 bytes (v2.4: 4,072).

@@ -26,6 +26,7 @@
  * SysTick, from the moment RSSI shows a burst. Samples go straight into dec406
  * (see README.md); the last five decoded messages stay in RAM.
  *
+ * A decoded message plays a short beep, whatever the speaker setting.
  * Keys (UV-K5 and UV-K1): UP/DOWN scroll, then select the newer / older message
  *   at an end · * normal / compact view · 4/6 tune -/+5 kHz (up to +/-50 kHz)
  *   · 5 back to the VFO frequency · 1 speaker on/off · MENU clear · EXIT quit.
@@ -71,7 +72,6 @@
 /* ---- BK4829 RAW receive ---- */
 #define REG_2B      0x2B
 #define REG_73      0x73
-#define REG_30      0x30   /* 0 then back: VCO recalibration, relock on the new frequency */
 #define REG_38      0x38   /* RX frequency, 10 Hz units, low 16 bits  */
 #define REG_39      0x39   /* RX frequency, high 16 bits              */
 #define STEP_10HZ   500    /* 5 kHz                                   */
@@ -89,6 +89,8 @@
 #define SPK_X       59u
 #define VIEW_COMPACT 1u
 #define BODY_BOTTOM 39u
+#define BEEP_HZ     1200u
+#define BEEP_MS     150u
 
 typedef struct {
     dec406_info_t info;
@@ -160,14 +162,17 @@ static char *putFlags(char *o,const dec406_info_t *in,const char *s){
 }
 static void tiny(char *buf,uint8_t x,uint8_t y,char *end){ *end='\0'; g.A->print_tiny(buf,x,y,false,true); }
 
+/* RX audio as the decoder needs it: AF in FM (PA4 follows the AF DAC), speaker
+ * amplifier as configured. */
+static void rxAudio(void){ g.A->set_af(APP_AF_FM); g.A->audio_path(g.cfg.spk); }
+
 /* ---- tuning: offset the RX frequency from the VFO (restored by the loader on exit) ---- */
 static void tune(void){
     uint32_t f=(uint32_t)((int32_t)g.vfoFreq+(int32_t)g.offSteps*STEP_10HZ);
     g.A->bk_write(REG_38,(uint16_t)(f&0xFFFFu));
     g.A->bk_write(REG_39,(uint16_t)(f>>16));
-    uint16_t r30=g.A->bk_read(REG_30);
-    g.A->bk_write(REG_30,0);
-    g.A->bk_write(REG_30,r30);
+    g.A->tones_off_rx();         /* REG_30 to 0 then RX: VCO recalibration, relock */
+    rxAudio();
 }
 /* "433.645" from 10 Hz units, rounded to the kHz, without division */
 static char *putFreq(char *o,uint32_t f){
@@ -239,6 +244,12 @@ static uint8_t capture(const saved_hw_t *saved){
     if(g.count<HISTORY) g.count++;
     g.cur=0;
     g.top=0;
+    /* Decode beep, even with the speaker off: the burst is over and the next one
+     * is ~50 s away. play_tone leaves the BK4829 in tone mode with the speaker
+     * off; tones_off_rx brings RX back, rxAudio the AF and the speaker. */
+    g.A->play_tone(BEEP_HZ,BEEP_MS);
+    g.A->tones_off_rx();
+    rxAudio();
     return APP_KEY_INVALID;
 }
 
@@ -372,7 +383,7 @@ static void handleKey(uint8_t key){
     g.prevKey=key;
     switch(key){
         case APP_KEY_EXIT: g.running=false; break;
-        case APP_KEY_1:    g.cfg.spk^=1u; g.A->audio_path(g.cfg.spk); break;
+        case APP_KEY_1:    g.cfg.spk^=1u; rxAudio(); break;
         case APP_KEY_STAR: g.cfg.view^=VIEW_COMPACT; g.top=0; break;
         case APP_KEY_5:    g.offSteps=0; tune(); break;
         case APP_KEY_MENU: g.count=g.cur=0; g.top=g.lim=0; g.nSync=g.nFail=0; g.lastErr=0; break;
@@ -405,8 +416,7 @@ void app_main(const app_api_t *api){
     g.A->cfg_load(&g.cfg.spk,sizeof g.cfg);
     g.cfg.spk=(uint8_t)(g.cfg.spk==1u);         /* erased flash or junk: speaker off */
     if(g.cfg.view!=VIEW_COMPACT) g.cfg.view=0;  /* normal view by default */
-    g.A->audio_path(g.cfg.spk);                 /* PA4 is before the speaker amplifier */
-    g.A->set_af(APP_AF_FM);
+    rxAudio();                                  /* PA4 is before the speaker amplifier */
     g.A->delay_ms(50);
 
     int32_t f=0;
