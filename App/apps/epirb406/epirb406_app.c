@@ -26,7 +26,7 @@
  * SysTick, from the moment RSSI shows a burst. Samples go straight into dec406
  * (see README.md); the last five decoded messages stay in RAM.
  *
- * A decoded message plays a short beep, whatever the speaker setting.
+ * A decoded message plays three beeps, whatever the speaker setting.
  * Keys (UV-K5 and UV-K1): UP/DOWN scroll, then select the newer / older message
  *   at an end · * normal / compact view · 4/6 tune -/+5 kHz (up to +/-50 kHz)
  *   · 5 back to the VFO frequency · 1 speaker on/off · MENU clear · EXIT quit.
@@ -89,7 +89,7 @@
 #define SPK_X       59u
 #define VIEW_COMPACT 1u
 #define BODY_BOTTOM 39u
-#define BEEP_HZ     1200u
+#define BEEP_HZ     1536u   /* 3 << 9: a cheap Thumb constant */
 #define BEEP_MS     150u
 
 typedef struct {
@@ -208,7 +208,8 @@ static uint16_t adcRead(void){
 }
 
 /* ---- one burst: sample PA4 at 9.6 kHz into the decoder ---- */
-static uint8_t capture(const saved_hw_t *saved){
+/* Not inlined into app_main: smaller that way (4 KiB overlay). */
+__attribute__((noinline)) static uint8_t capture(const saved_hw_t *saved){
     dec406_t d;
     dec406_init(&d,true);        /* INT: integrate the discriminator pulses */
     adcSelPA4(saved);
@@ -244,12 +245,14 @@ static uint8_t capture(const saved_hw_t *saved){
     if(g.count<HISTORY) g.count++;
     g.cur=0;
     g.top=0;
-    /* Decode beep, even with the speaker off: the burst is over and the next one
-     * is ~50 s away. play_tone leaves the BK4829 in tone mode with the speaker
-     * off; tones_off_rx brings RX back, rxAudio the AF and the speaker. */
-    g.A->play_tone(BEEP_HZ,BEEP_MS);
-    g.A->tones_off_rx();
-    rxAudio();
+    /* Decode alert, even with the speaker off: three 150 ms beeps, 150 ms apart.
+     * The gaps are 0 Hz "tones" (REG_71 = 0, no output): the same call as a beep,
+     * cheaper than a delay. The burst is over and the next one is ~50 s away.
+     * tune() then brings RX, the AF and the speaker back. */
+    g.A->prepare_tone();
+    g.A->audio_path(true);
+    for(unsigned hz=BEEP_HZ, n=5u; n; n--, hz^=BEEP_HZ) g.A->play_tone_raw((uint16_t)hz,BEEP_MS);
+    tune();
     return APP_KEY_INVALID;
 }
 
