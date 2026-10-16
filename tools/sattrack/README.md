@@ -96,5 +96,5 @@ middle of the pass; near the start and end it beeps twice and does nothing.
 - Power, bandwidth and squelch come from the VFO you were on. The app never
   changes your channels.
 - The radio only transmits on FM passes, inside your TX band settings.
-- Passes are stored at 0x130000-0x141000 in the radio's flash. The format is
+- Passes are stored at 0x162000-0x173000 in the radio's flash. The format is
   in `App/apps/sat/sat_format.h`.

@@ -44,9 +44,10 @@
  *   1  v6.0.0 baseline: every service up to and including beam_draw
  *   2  ticks_ms, rand32, asset_read (+ app_header_t asset_size / asset_crc),
  *      idivmod, uidivmod (the resident division helpers), Labs system info,
- *      current and minimum-since-boot free stack/RAM margin */
+ *      current and minimum-since-boot free stack/RAM margin
+ *   3  crc16, format, satellite pass bridge (sat_*, APP_CAP_SAT) */
 #define APP_ABI_MAJOR  1u
-#define APP_API_LEVEL  3u   /* 3  satellite pass bridge (sat_*, APP_CAP_SAT) */
+#define APP_API_LEVEL  3u
 
 /* Minimum API level of an app that ships read-only assets (pack_app.py). */
 #define APP_API_ASSETS 2u
@@ -310,7 +311,7 @@ typedef struct app_api {
 } app_api_t;
 
 #if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4
-/* The level-2 layout shipped in v6.1.0 is frozen: level 3 starts at 328. */
+/* The level-2 layout shipped in v6.1.0 and v6.2.0 is frozen: level 3 starts at 328. */
 _Static_assert(__builtin_offsetof(app_api_t, crc16) == 328u,
                "API level 2 layout changed");
 #endif

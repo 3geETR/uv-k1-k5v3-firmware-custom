@@ -15,10 +15,10 @@
 
 /*
  * Sat Track pass store, shared by the firmware (UART upload, sat_read) and the
- * app. External flash 0x130000-0x141000, between the app slots and the voice
- * data: sector 0 holds the index, sectors 1-16 one pass each (64-byte header,
- * then the samples from AOS, then the display extras at SAT_EXT_OFF). Passes
- * are written in AOS order.
+ * app. External flash 0x162000-0x173000, right after the 48 app slots at the
+ * start of the expansion reserve: sector 0 holds the index, sectors 1-16 one
+ * pass each (64-byte header, then the samples from AOS, then the display
+ * extras at SAT_EXT_OFF). Passes are written in AOS order.
  */
 
 #ifndef APPS_SAT_FORMAT_H
@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define SAT_STORE_BASE    0x00130000u
+#define SAT_STORE_BASE    0x00162000u
 #define SAT_SECTOR_SIZE   0x00001000u
 #define SAT_PASS_COUNT    16u
 #define SAT_SECTOR_COUNT  (1u + SAT_PASS_COUNT)
