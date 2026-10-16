@@ -2,8 +2,10 @@
 #define APPS_APRS_PROFILE_H
 
 /* Mutable APRS TX asset block.  APRS Edit owns the UI; APRS TX only consumes
- * this fixed layout when it builds a frame. */
-#define APRS_PROFILE_MAGIC        0x36435041u /* "APC6" */
+ * this fixed layout when it builds a frame. Bump the marker whenever a field
+ * gains values an older APRS TX would reject: the configuration proxy then
+ * finds no target and APRS Edit shows "TX/FW MISMATCH" instead of saving. */
+#define APRS_PROFILE_MAGIC        0x37435041u /* "APC7": path 3 = ARISS */
 #define APRS_PROFILE_LEN          117u
 #define APRS_COMMENT_MAX          89u
 #define APRS_POS_DIGITS           13u

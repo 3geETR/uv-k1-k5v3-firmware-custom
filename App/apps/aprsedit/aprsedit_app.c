@@ -16,7 +16,8 @@
 #define LOOP_MS       10u
 #define EDIT_CHARS    11u    /* comment: normal-font characters per pane row   */
 #define EDIT_ROWS     6u     /* rows above the bottom capsules: no scrolling   */
-#define PATH_MAX      2u
+#define PATH_WIDE2    2u     /* "WIDE1-1,WIDE2-1": its second hop on a second line */
+#define PATH_MAX      3u     /* "ARISS", the ISS digipeater alias */
 #define LAT_DIGITS    6u
 #define INDEX_SEP_X   48u
 #define PANE_X        50u
@@ -174,12 +175,12 @@ static void draw_menu(const char *assets)
 /* The path name, in bold while it is being edited (as the SSID and symbol). */
 static void draw_path(const char *assets, uint8_t path, bool bold)
 {
-    /* The first hop never moves: "DIRECT" or "WIDE1-1" on line 2. The longest
-     * path adds its second hop on the line below, read after the comma of its
-     * own name "WIDE1-1,WIDE2-1". */
+    /* The first hop never moves: "DIRECT", "WIDE1-1" or "ARISS" on line 2.
+     * The two-hop path shows "WIDE1-1" there and adds its second hop on the
+     * line below, read after the comma of its own name "WIDE1-1,WIDE2-1". */
     const char *paths = assets + T_PATHS;
-    pane(paths + (path ? T_PATHS_STRIDE : 0u), 2u, bold);
-    if (path == PATH_MAX) pane(paths + PATH_MAX * T_PATHS_STRIDE + 8u, 3u, bold);
+    pane(paths + (path == PATH_WIDE2 ? 1u : path) * T_PATHS_STRIDE, 2u, bold);
+    if (path == PATH_WIDE2) pane(paths + PATH_WIDE2 * T_PATHS_STRIDE + 8u, 3u, bold);
 }
 
 /* The comment in rows of the normal font. */

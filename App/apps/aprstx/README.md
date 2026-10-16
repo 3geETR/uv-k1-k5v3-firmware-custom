@@ -16,7 +16,7 @@ which is also the test receiver.
 |---|---|
 | Source | optional profile callsign (1-6 uppercase letters/digits) + `SSID` = 7 (0-15, 0 = none), editable in APRS Edit; an empty profile callsign uses API `boot_callsign` |
 | `DEST` | `APZK5` (APZ = experimental software) |
-| `PATH` | `1` = `WIDE1-1`, an index in `PATHS`: `DIRECT` (no digipeater), `WIDE1-1`, `WIDE1-1,WIDE2-1`; editable in APRS Edit |
+| `PATH` | `1` = `WIDE1-1`, an index in `PATHS`: `DIRECT` (no digipeater), `WIDE1-1`, `WIDE1-1,WIDE2-1`, `ARISS`; editable in APRS Edit |
 | `LAT`, `LON` | `4850.90N`, `00216.25E`: default position, editable in APRS Edit |
 | `SYMBOL` | `/[` (person): one of 48 symbols, editable in APRS Edit |
 | `COMMENT` | `Portable, UV-K5/K1 F4HWN firmware (github.com/armel)` by default; up to 89 characters, editable with the companion APRS Edit app |
@@ -53,7 +53,9 @@ Yaesu bitmap set is stored in the app assets; the editor keeps the full width.
 
 Paths: `DIRECT` (heard only by the stations and iGates in range), `WIDE1-1` (one
 repeat by a nearby digipeater), `WIDE1-1,2-1` (`WIDE1-1,WIDE2-1`: the usual
-mobile / portable path, two repeats).
+mobile / portable path, two repeats), `ARISS` (the ISS digipeater RS0ISS, which
+ignores the WIDE aliases: set the VFO to 145.825 MHz for a pass; Doppler is about
+±3.5 kHz on 2 m and the digipeater is not always active).
 
 APRS TX keeps only its operational settings in ordinary app config: level,
 twist, display view and beacon interval (5 bytes, magic `0xAA`). It migrates the

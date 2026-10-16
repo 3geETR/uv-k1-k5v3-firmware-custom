@@ -21,7 +21,7 @@
  *
  * The source is the profile callsign, or the boot-message callsign when the
  * profile leaves it empty, with an SSID;
- * destination, the WIDE path entries, symbol and comment are AX.25-encoded in
+ * destination, the path entries (WIDEs, ARISS), symbol and comment are AX.25-encoded in
  * gen_assets.py (assets). APRS Edit owns the callsign, position, SSID, path,
  * symbol and comment stored in the mutable profile asset. The frame is built at launch,
  * FCS included.
@@ -79,8 +79,10 @@
 #define TAIL_FLAGS  3u
 #define CALL_MAX    APRS_CALL_MAX
 #define INFO_LEN    (1u + 8u + 1u + 9u + 1u + APRS_COMMENT_MAX) /* !lat/lon[comment */
-#define PATH_MAX    2u     /* WIDE entries: 0 = DIRECT                        */
-#define FRAME_MAX   (7u + 7u + PATH_MAX * 7u + 2u + INFO_LEN + 2u)
+#define PATH_HOPS   2u     /* WIDE entries: 0 = DIRECT                        */
+#define PATH_ARISS  3u     /* "ARISS" alone, stored after the WIDE entries     */
+#define PATH_MAX    PATH_ARISS
+#define FRAME_MAX   (7u + 7u + PATH_HOPS * 7u + 2u + INFO_LEN + 2u)
 
 /* position: 13 digits DDMMhh DDDMMhh, hemispheres bit 0 south, bit 1 west */
 #define POS_DIGITS  APRS_POS_DIGITS
@@ -271,8 +273,10 @@ static void build(void){
     A->asset_read(F_DEST,f,F_DEST_LEN);
     for(uint8_t i=0;i<6u;i++) f[7+i]=(uint8_t)((i<n?call[i]:' ')<<1);
     f[13]=(uint8_t)(0x60u|(g.ssid<<1)|(g.path?0u:1u));        /* end bit if DIRECT */
-    uint8_t k=(uint8_t)(14u+g.path*7u);                        /* the first path WIDEs */
-    if(g.path){ A->asset_read(F_WIDE,f+14,(uint16_t)(k-14u)); f[k-1]|=1u; }
+    uint8_t hops=g.path, at=0;
+    if(hops==PATH_ARISS){ hops=1u; at=PATH_HOPS*7u; }          /* ISS digipeater alias */
+    uint8_t k=(uint8_t)(14u+hops*7u);                          /* the first path WIDEs */
+    if(hops){ A->asset_read((uint16_t)(F_PATH+at),f+14,(uint16_t)(k-14u)); f[k-1]|=1u; }
     f[k++]=0x03; f[k++]=0xF0;                                  /* UI frame, no layer 3 */
     uint8_t sym[2];
     A->asset_read((uint16_t)(SYM_CODES+g.sym*2u),sym,2);
