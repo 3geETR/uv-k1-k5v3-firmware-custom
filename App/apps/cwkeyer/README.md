@@ -64,6 +64,8 @@ while the app is open.
 
 ## USB-C paddle adapter
 
+![USB-C paddle adapter wiring](usbc-paddle-wiring.svg)
+
 A USB-C plug (or a cut USB-C to USB-A cable) wired to a 3.5 mm stereo jack:
 
 | USB-C line | MCU pin | Jack | Function |
