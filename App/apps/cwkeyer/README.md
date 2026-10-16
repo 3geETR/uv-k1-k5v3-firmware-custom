@@ -100,7 +100,8 @@ the nearest `REG_3B` step. The crystal correction is
 written to BK4829 `REG_3B` (reference crystal word) on entry, on top of the
 value found there, and that value is restored on exit. The default is 14 steps
 (+2.69 ppm), for a carrier measured +400 Hz high at 144.225 MHz and +1.20 kHz
-high at 433.225 MHz; the step sign is still to be confirmed on the bench. The
+high at 433.225 MHz; a positive step lowers the carrier (checked on an SDR,
+0 vs +14 steps at 433.650 MHz). The
 PTT always remains a straight key, so it is usable in the paddle mode.
 The frequency offset selected with `UP` / `DOWN` is local to the overlay. It is
 applied equally to CW RX, TX and the displayed frequency, and resets to zero
@@ -169,16 +170,16 @@ sidetone.
 
 ## Status and known limits
 
-- Bench-validated: USB-C paddle contacts in both orientations, clean exit and
-  PC link after exit, no stray edges at rest (read-only probe app on a UV-K1,
-  then this app).
+- Tested on a UV-K1 (Labs v6.2.0): USB-C paddle and straight key in both plug
+  orientations, SIDE and PTT keying, every setting, exit and power-off, PC link
+  after exit, no stray edges at rest, no false elements with the paddle lead
+  near the antenna at high power into a dummy load, timing and decoding from
+  20 to 60 WPM on an SDR.
 - `PADDLE` is a plain automatic keyer without paddle memory; the 0.2 SIDE
   keyer remembered an opposite-paddle tap during an element. Iambic A/B
   (squeeze memory) is left for a later change, after on-air timing checks.
-- The sign of the `REG_3B` crystal step is still to be confirmed with an SDR
-  (0 vs +14 steps at 433.650 MHz, about 1.17 kHz expected).
-- Speed estimate: clean up to 40 WPM, probably usable up to 50 to 60 WPM, where
-  the fixed 4 ms ramps become a large part of a dot; to be measured.
+- Above about 40 WPM the fixed 4 ms ramps become a large part of a dot (20 %
+  at 60 WPM): the envelope gets rounder, the bandwidth does not change.
 - The K-plug line PA10 is not used as a paddle input: it follows the PTT
   button on the bench.
 
