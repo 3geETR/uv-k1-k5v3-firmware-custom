@@ -48,9 +48,21 @@
  *      sample / close (RX audio on PA4), cycles_48mhz, draw_frequency; the
  *      Labs system
  *      information slots become part of the layout in every build, so the
- *      level 3 services sit at one offset for every app */
+ *      level 3 services sit at one offset for every app; handoff, handoff_read
+ *      (an app launches another and hands it a message) */
 #define APP_ABI_MAJOR  1u
 #define APP_API_LEVEL  3u
+
+/* App name length in app_header_t, the name handoff() takes (API level 3). */
+#define APP_NAME_LEN    16
+
+/* Largest message handoff() carries from one app to the next (API level 3):
+ * raw bytes, not NUL-terminated.  32 covers a position, a symbol and a short
+ * ID.  It can be raised in a later release (one byte of resident RAM, i.e. of
+ * stack margin, per byte; len stays uint8_t, 255 at most); an older firmware
+ * then clamps, so receivers must check the length handoff_read() returns.  It
+ * must never be lowered. */
+#define APP_HANDOFF_MAX 32u
 
 /* Minimum API level of an app that ships read-only assets (pack_app.py). */
 #define APP_API_ASSETS 2u
@@ -326,14 +338,37 @@ typedef struct app_api {
     /* Unsigned decimal of u at dst, no leading zeros, over the whole uint32
      * range. Not NUL-terminated: returns the end. Writes at most 10 chars. */
     char *(*append_u32)(char *dst, uint32_t u);
+
+    /* ---- API level 3: hand-off to another app ----
+     * Only one app runs at a time, so an app asks the loader to launch the
+     * next one after it returns.  handoff() names the installed app to launch
+     * and stages up to APP_HANDOFF_MAX bytes for it, in RAM only.  name is
+     * APP_NAME_LEN bytes, NUL-padded as in the header, which a
+     * static const char name[APP_NAME_LEN] = "..." is.  The calling app then
+     * returns as usual: the loader commits its config, then launches the target
+     * instead of going back to the menu.  The last call wins: a name no
+     * valid app has returns false and leaves nothing pending, which also
+     * cancels an earlier call.  Copies min(len, APP_HANDOFF_MAX) bytes from
+     * msg (NULL only with len 0); a longer len is clamped. */
+    bool    (*handoff)(const char name[APP_NAME_LEN], const void *msg, uint8_t len);
+    /* The message handed to this app and its sender's name.  Copies
+     * min(message length, max) bytes into buf and returns that count; 0 when
+     * the app was launched from the menu or a shortcut (buf and from are then
+     * untouched).  from receives exactly APP_NAME_LEN bytes, NUL-padded but not
+     * NUL-terminated when the name fills them: give it char[APP_NAME_LEN + 1].
+     * Read once: call it at launch, before handoff(), which reuses the buffer. */
+    uint8_t (*handoff_read)(void *buf, uint8_t max, char *from);
 } app_api_t;
 
 /* The v2 table, frozen: level 3 services start right after it. */
 _Static_assert(__builtin_offsetof(app_api_t, append_i32) == 328u,
                "the level 2 prefix must stay 328 bytes");
-/* The level 3 table, frozen: a new service goes after it, with a new level. */
-_Static_assert(sizeof(app_api_t) == 356u,
-               "the level 3 API table must stay 356 bytes");
+/* The level 3 table, frozen once released: a later service goes after it,
+ * with a new level. */
+_Static_assert(__builtin_offsetof(app_api_t, handoff) == 356u,
+               "the hand-off services follow append_u32");
+_Static_assert(sizeof(app_api_t) == 364u,
+               "the level 3 API table must stay 364 bytes");
 
 /* Wrap-safe modular ordering for deadlines less than half a cycle-counter
  * period away (~44.7 s at 48 MHz). Unused helpers emit no application code. */
