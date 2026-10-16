@@ -25,7 +25,7 @@
  * offsets of its picture scans from the sync end, their weights in the
  * luminance, the period and the pixel step.
  *
- * TX (PTT or MENU): the boot logo (128x64, 1 bit, external flash 0x011008, as
+ * TX (MENU): the boot logo (128x64, 1 bit, external flash 0x011008, as
  * ui/welcome.c reads it), each scan carrying the logo row in 128 equal columns
  * (scan / 128: whole cycles at 48 MHz), the 64 rows spread over the periods;
  * grey (every colour scan the same, neutral chroma): a dark LCD pixel is black
@@ -46,9 +46,11 @@
  * (threshold) or dithered (4x4 Bayer), key 3. The chroma is ignored: grey.
  * The picture fills the whole screen, status line included; the keys and the
  * row just drawn (one LCD page, ~1.5 ms) are served after each period's last
- * scan, before its sync ends.
+ * scan, before its sync ends. Page blits drive the LCD SPI directly: the
+ * resident line blit also forces a blocking K5Viewer frame, which would turn
+ * the skipped picture data into bands.
  *
- * Keys (UV-K5 and UV-K1): PTT or MENU send the logo · 1 next TX mode, F then
+ * Keys (UV-K5 and UV-K1): MENU sends the logo · 1 next TX mode, F then
  *   1 the previous one (F icon in the status bar while armed, as APRS TX) ·
  *   2 rendering 1-bit / dither · 3 speaker on/off (off at launch: the decoder
  *   does not need it) · 4 picture / info screen (once a picture came) ·
@@ -82,6 +84,10 @@ static inline volatile uint32_t *hw(uint32_t a){
 #define ADC_SQR3    (hw(0x40012400u)[0x38/4])
 #define ADC_DR      (hw(0x40012400u)[0x50/4])
 #define GPIOA_MODER (*(volatile uint32_t *)0x50000000u)
+#define SPI_SR_TXE     (1u << 1)
+#define SPI_SR_RXNE    (1u << 0)
+#define LCD_CS_PIN     (1u << 2)  /* PB2 */
+#define LCD_A0_PIN     (1u << 6)  /* PA6 */
 #define DAC_CR      (hw(0x40007400u)[0x00/4])
 #define DAC_SWTRIGR (hw(0x40007400u)[0x04/4])
 #define DAC_DHR12R1 (hw(0x40007400u)[0x08/4])
@@ -300,14 +306,30 @@ static void show(void){
     A->blit_status();
     A->blit_full();
 }
-/* One LCD page (0 the status line, 1-7 the frame buffer) to the LCD: ~1.5 ms. */
-static void blitPage(unsigned pg){
-    const app_api_t *A=g.A;
-    if(pg) A->blit_line(pg-1u); else A->blit_status();
+/* One LCD byte over SPI1. The peripheral is already configured by ST7565_Init. */
+static inline void lcdByte(volatile uint32_t *spi,uint8_t v){
+    while(!(spi[0x08/4]&SPI_SR_TXE)){}
+    *(volatile uint8_t *)&spi[0x0C/4]=v;
+    while(!(spi[0x08/4]&SPI_SR_RXNE)){}
+    (void)*(volatile uint8_t *)&spi[0x0C/4];
 }
 static uint8_t *page(unsigned pg){
     const app_api_t *A=g.A;
     return pg?A->fb[pg-1u]:A->status_line;
+}
+/* One LCD page (0 the status line, 1-7 the frame buffer), without the resident
+ * ST7565_BlitLine side effect which forces a blocking K5Viewer frame. */
+static void blitPage(unsigned pg){
+    volatile uint32_t *spi=hw(0x40013000u), *pa=hw(0x50000000u), *pb=hw(0x50000400u);
+    pb[0x28/4]=LCD_CS_PIN;             /* CS low */
+    pa[0x28/4]=LCD_A0_PIN;             /* command */
+    lcdByte(spi,(uint8_t)(0xB0u|pg));  /* page */
+    lcdByte(spi,0x10u);                /* column high nibble */
+    lcdByte(spi,0x04u);                /* visible RAM starts at column 4 */
+    pa[0x18/4]=LCD_A0_PIN;             /* data */
+    uint8_t *p=page(pg);
+    for(unsigned x=0;x<128u;x++) lcdByte(spi,p[x]);
+    pb[0x18/4]=LCD_CS_PIN;             /* CS high */
 }
 
 /* ---- absolute cycle clock: the 10 ms SysTick interrupt count (ticks_ms) plus
@@ -596,6 +618,7 @@ static void sample(int32_t adc){
 static void handleKeys(void){
     const app_api_t *A=g.A;
     uint8_t key=A->get_key();
+    if(key==APP_KEY_PTT) key=APP_KEY_INVALID;  /* reject UART-coupled PTT pulses */
     if(key==APP_KEY_INVALID||key==g.prevKey){ g.prevKey=key; return; }
     g.prevKey=key;
     g.redraw=1;
@@ -611,7 +634,7 @@ static void handleKeys(void){
         else if(g.image) g.image=0;
         else g.running=false;
     }
-    else if(key==APP_KEY_PTT||key==APP_KEY_MENU) send();
+    else if(key==APP_KEY_MENU) send();
     else if(key==APP_KEY_1){             /* next TX mode, F then 1 the previous one */
         if(back) g.txMode=(uint8_t)(g.txMode?g.txMode-1u:MODE_COUNT-1u);
         else if(++g.txMode>=MODE_COUNT) g.txMode=0;
