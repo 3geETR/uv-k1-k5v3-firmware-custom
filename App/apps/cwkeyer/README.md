@@ -4,48 +4,110 @@
 VFO. It is entirely contained in the 4 KiB overlay and uses only API level 2;
 it has no resident firmware component.
 
+## Requirements and install
+
+- F4HWN Labs firmware v6.2.0 or later (overlay ABI 1, API level 2).
+- Build: `./compile-app.sh cwkeyer` from the repository root, output
+  `build/Apps/CWKeyer.app`; install it in a free slot with UV Studio.
+- The VFO must be in FM: the over-the-air signal is an unmodulated carrier
+  (A1A), so the other station needs a CW or SSB receiver to hear a tone; an FM
+  receiver only hears its squelch open and close.
+
 ## Controls
 
-- `PTT`: straight-key carrier in either mode.
-- `SIDE1` / `SIDE2` in `STRAIGHT`: additional straight keys.
-- `SIDE1` / `SIDE2` in `PADDLE`: automatic dits and dahs with element memory.
+- `PTT`: straight-key carrier in every mode.
+- Paddle port (`7`): `SIDE` uses SIDE1/SIDE2; `USB` uses a paddle or key wired
+  to the USB-C connector (D+ = tip = dit, D- = ring = dah, sleeve = ground,
+  VBUS and CC left open; KI6CR adapter wiring).
+- `1`: toggle `STRAIGHT` / `PADDLE`.
+  - `STRAIGHT`: SIDE1/SIDE2 are parallel straight keys; on `USB` only the tip
+    keys, so a mono plug works.
+  - `PADDLE`: automatic dits and dahs, no paddle memory. On `USB` both
+    contacts are read together, so a squeeze alternates elements. On `SIDE`
+    only one key is visible at a time (single-paddle keyer). Iambic A/B
+    variants are withdrawn until they are validated on the bench.
 - `0`: enable or mute the CW receive audio path.
-- `1`: switch between `STRAIGHT` and `PADDLE`.
-- `2`: raise the keyer speed.
+- `2`: raise the keyer speed (5 to 60 WPM).
 - `3`: raise the receive CW tone by 50 Hz.
 - `4`: raise the semi-break-in delay by 50 ms.
-- `5`: swap the SIDE1/SIDE2 dit and dah assignments.
-- `6`: raise the crystal correction by 0.01 ppm.
-- `F`, then `1` to `6`: apply the corresponding setting in the reverse
-  direction. Two-state settings (`MODE` and paddle order) simply toggle.
-- `UP` / `DOWN`: tune the app frequency by a fixed 100 Hz CW step. Holding a
-  direction repeats after 400 ms, then every 100 ms.
-- `MENU`: disarm TX and open the help page.
-- `EXIT`: leave the app from the main page, or return to the main page from
-  help. `MENU` also returns from help.
+- `5`: swap the dit and dah contacts.
+- `6`: raise the crystal correction by one BK4829 `REG_3B` step (0.19 ppm).
+- `7`: toggle the paddle port `SIDE` / `USB`.
+- `F`, then `2`, `3`, `4` or `6`: lower the corresponding setting instead.
+- `UP` / `DOWN`: tune the app frequency by a fixed 100 Hz CW step, up to
+  +/-50 kHz. Holding a direction repeats after 400 ms, then every 100 ms.
+- `EXIT`: leave the app.
+
+| Setting | Range | Default |
+|---|---|---|
+| Speed (`WPM`) | 5 to 60 WPM | 18 |
+| Receive tone and sidetone (`TONE`) | 300 to 900 Hz, 50 Hz steps | 700 Hz |
+| Semi-break-in (`BK`) | 250 to 1500 ms, 50 ms steps | 300 ms |
+| Crystal correction (`XTAL`) | -50 to +50 `REG_3B` steps | +14 (+2.69 ppm) |
+| Mode / port / order | `STRAIGHT`, `PADDLE` / `SIDE`, `USB` / `DI-DA`, `DA-DI` | `STRAIGHT` / `SIDE` / `DI-DA` |
+
+The status bar shows the title, `RX` while the transmitter is off, `TX OFF`
+when a transmission is refused, the speaker or `F` icon and the app version.
+A transmission is refused (`TX OFF`) when the resident firmware forbids TX on
+the frequency (TX lock outside the allowed bands), when the battery is too low
+or the voltage too high, or when the VFO is not in FM. Release every keying
+control to clear it.
+
+There is no help page in this build: the paddle keyer and the USB port use the
+space it took.
+
+On the `USB` port the app sets PA11/PA12 to inputs with pull-up and stops the
+USB clock while it runs (a powered USB device holds D+ for about two seconds
+after a contact closes); only those bits are changed and they are restored on
+exit, so the PC link works again once the app is closed. There is no PC link
+while the app is open.
+
+## USB-C paddle adapter
+
+A USB-C plug (or a cut USB-C to USB-A cable) wired to a 3.5 mm stereo jack:
+
+| USB-C line | MCU pin | Jack | Function |
+|---|---|---|---|
+| D+ | PA12 | tip | dit (straight key in `STRAIGHT`) |
+| D- | PA11 | ring | dah |
+| GND | - | sleeve | common |
+| VBUS, CC, shield | - | insulated, not connected | - |
+
+Contacts close to ground; the app supplies the pull-ups. The adapter works in
+both plug orientations. Never plug the adapter into a charger or a computer:
+VBUS would be live and D+/D- would be driven by the host. A mono plug is fine
+in `STRAIGHT` (the ring is ignored); in `PADDLE` a mono plug holds dah closed.
+
+Keyer element timing is measured on the SysTick counter, so the keypad scan
+done at every poll (about 0.2 ms) does not stretch the elements. Contacts must
+read the same on three consecutive polls (about 3.5 ms) before a straight-key
+edge or a keyer start is accepted.
 
 The main screen shows all six controls as compact, equal-width 43-pixel
 3x5-font capsules in the bottom three lines below the frequency. The left
 column is anchored to the left edge, the right column to the right edge, and
-every label is left-aligned inside its capsule: `STRAIGHT` / `PADDLE`, `WPM`,
-`TONE`, `BK`, `DIT-DAH` / `DAH-DIT`, and `XTAL`. Keyboard shortcuts are shown
-on the help page instead of inside the capsules. While help is open, keying and
-setting changes are disabled; `MENU` or `EXIT` returns to the main page.
+every label is left-aligned inside its capsule: the mode (`STRAIGHT`,
+`PADDLE`), `WPM`, `TONE`, `BK`, the port and contact order
+(`SIDE DI-DA`, `USB DA-DI`, ...) and `XTAL`. The status bar shows the app
+version.
 The Foxhunt speaker icon shows that receive audio is enabled; the `F` icon
 temporarily replaces it while reverse adjustment is armed.
 
-The speed, mode, paddle assignment, calibration, receive pitch, break-in delay
-and speaker state are saved when the app exits. The default correction is +2.77 ppm,
-measured as +400 Hz at 144.225 MHz and +1.20 kHz at 433.225 MHz. A positive
-displayed correction means the uncorrected carrier was high; the app therefore
-lowers the programmed TX frequency proportionally. The PTT always remains a
-straight key, so it is usable even while `PADDLE` is selected.
+The speed, mode, paddle assignment, calibration, receive pitch, break-in delay,
+port and speaker state are saved when the app exits. A 0.2 configuration is
+kept on upgrade; its crystal correction (hundredths of a ppm) is converted to
+the nearest `REG_3B` step. The crystal correction is
+written to BK4829 `REG_3B` (reference crystal word) on entry, on top of the
+value found there, and that value is restored on exit. The default is 14 steps
+(+2.69 ppm), for a carrier measured +400 Hz high at 144.225 MHz and +1.20 kHz
+high at 433.225 MHz; the step sign is still to be confirmed on the bench. The
+PTT always remains a straight key, so it is usable in the paddle mode.
 The frequency offset selected with `UP` / `DOWN` is local to the overlay. It is
 applied equally to CW RX, TX and the displayed frequency, and resets to zero
 when the app exits; the resident VFO is never modified.
-Interface keys are accepted only after a stable 20 ms reading. PTT and the two
-side keys remain immediate, preventing keypad-matrix transients from opening
-help or changing a setting without adding latency to CW keying.
+Interface keys are accepted only after a stable 20 ms reading, so
+keypad-matrix transients cannot change a setting. PTT is immediate; the paddle
+contacts (SIDE or USB) only go through the 3.5 ms contact debounce.
 Full-screen refreshes are kept out of the keying path; TX/RX transitions update
 only the status line. Battery sampling is deferred until the transmitter has
 fully returned to RX so it cannot stretch a mark or an inter-element space.
@@ -73,7 +135,7 @@ Every mark uses a four-step, 4 ms rise and fall of the saved PA bias. Internal
 PA gain and board PA enable are asserted before the rise, then removed after
 the fall. Between marks the synthesizer remains locked, but internal PA gain,
 PA bias and the board PA are all off.
-`MENU`, `EXIT`, and every abort path call `tx_end` to disable the PA and restore
+`EXIT`, retuning, and every abort path call `tx_end` to disable the PA and restore
 normal RX. After the final mark, the configurable semi-break-in hang (300 ms
 by default) keeps the synthesizer ready across Morse element gaps, then
 automatically calls `tx_end` and restores reception without requiring `MENU`.
@@ -90,9 +152,8 @@ setting to lock and applies the normal ramp to the first deliberate mark. A
 spectrum/SDR check is required before assuming the four-step envelope is
 spectrally clean on every power band.
 
-True iambic A/B squeeze keying is not possible through the current single-key
-`get_key` API. The paddle mode supports one paddle at a time, automatic repeat,
-and memory of the opposite paddle when the scanner reports it during an element.
+Squeeze keying needs the USB port: the single-key `get_key` API shows one SIDE
+key at a time. The paddle mode has automatic repeat and no paddle memory.
 The TX sidetone follows the approach used by NR7Y's CW implementation: Tone1
 is routed to the BK4829 `AF_ALAM` output while register `0x50` keeps TX
 modulation muted. Morse edges change only the Tone1 frequency control word in
@@ -105,3 +166,25 @@ before the amplifier is enabled. The gain then rises one DAC code at a time
 instead of jumping directly to full level. The over-the-air signal therefore
 remains A1A rather than MCW. Key `0` controls both receive audio and the TX
 sidetone.
+
+## Status and known limits
+
+- Bench-validated: USB-C paddle contacts in both orientations, clean exit and
+  PC link after exit, no stray edges at rest (read-only probe app on a UV-K1,
+  then this app).
+- `PADDLE` is a plain automatic keyer without paddle memory; the 0.2 SIDE
+  keyer remembered an opposite-paddle tap during an element. Iambic A/B
+  (squeeze memory) is left for a later change, after on-air timing checks.
+- The sign of the `REG_3B` crystal step is still to be confirmed with an SDR
+  (0 vs +14 steps at 433.650 MHz, about 1.17 kHz expected).
+- Speed estimate: clean up to 40 WPM, probably usable up to 50 to 60 WPM, where
+  the fixed 4 ms ramps become a large part of a dot; to be measured.
+- The K-plug line PA10 is not used as a paddle input: it follows the PTT
+  button on the bench.
+
+## Credits
+
+- CW Keyer: Armel F4HWN.
+- USB-C paddle port, paddle keyer and contact debounce: Johan Denoyer F4WAT,
+  USB-C wiring after KI6CR's CW adapter for the UV-K5 V3.
+- TX sidetone approach: NR7Y's CW implementation.
