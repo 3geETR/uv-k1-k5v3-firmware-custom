@@ -239,8 +239,13 @@ static void beaconDraw(bool txNow,uint16_t il){
     }
     char *o=put(s,T(t,T_TX)); *o++=' '; o=putu(o,g.beaconTx); *o++='s'; *o='\0'; tag(s,4,5);
     o=put(s,T(t,T_IDLE)); *o++=' '; o=putu(o,g.beaconIdle); *o++='s'; *o='\0'; tag(s,4,6);
-    foxLabel(s); tag(s,56,5);
-    { const char *m=T(t,g.carrier?T_CARR:T_TONE); tag(m,(uint8_t)(125-slen(m)*4),5); }
+    foxLabel(s);
+    {
+        const char *m=T(t,g.carrier?T_CARR:T_TONE);
+        const uint8_t mx=(uint8_t)(125u-slen(m)*4u);
+        tag(s,(uint8_t)(mx-5u-slen(s)*4u),5);
+        tag(m,mx,5);
+    }
 }
 static void blit(void){ A->blit_status(); A->blit_full(); }
 

@@ -1208,11 +1208,11 @@ static void FOXHUNT_BeaconDraw(bool txNow, uint16_t idleLeft)
     FOXHUNT_Tag(str, 4, 5);
     sprintf(str, "IDLE %us", beaconIdle);
     FOXHUNT_Tag(str, 4, 6);
-    FOXHUNT_FoxLabel(str);
-    FOXHUNT_Tag(str, 56, 5);
-
     const char *mode = beaconCarrierKeyed ? "CARR" : "TONE";
-    FOXHUNT_Tag(mode, (uint8_t)(125 - strlen(mode) * 4), 5);
+    const uint8_t modeX = (uint8_t)(125 - strlen(mode) * 4);
+    FOXHUNT_FoxLabel(str);
+    FOXHUNT_Tag(str, (uint8_t)(modeX - 5u - strlen(str) * 4u), 5);
+    FOXHUNT_Tag(mode, modeX, 5);
 }
 
 static void FOXHUNT_BeaconKeys(void)
