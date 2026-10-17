@@ -2,18 +2,18 @@
 
 Receive-only overlay application for standard Meteomodem M10 radiosondes. It
 samples the BK4829 AF output on PA4, validates the M10 checksum, and displays
-the serial number, GPS position, and altitude.
+the serial number, GPS position, altitude, and outside temperature.
 
 ## Status
 
-Version 0.1 implements the standard M10 `0x9F` telemetry frame. The parser and
-soft-input path have a synthetic host test. Live reception has also been
-validated in the field with an operational M10 radiosonde transmitted from
-Trappes, France.
+Version 0.2 implements the standard M10 `0x9F` telemetry frame and outside
+temperature conversion. The parser and soft-input path have a synthetic host
+test. Live reception has also been validated in the field with an operational
+M10 radiosonde transmitted from Trappes, France.
 
 Not implemented yet:
 
-- M10 temperature and humidity conversion;
+- M10 humidity conversion;
 - M10+ `0xAF` frames;
 - periodic `0x49` satellite-level frames.
 
@@ -53,6 +53,8 @@ samples per chip. The decoder DPLL tracks this small difference.
 - M10 linear 16-bit checksum;
 - Trimble GPS packet `0x20` position and altitude;
 - standard five-byte M10 serial number.
+- Shibaura PB5-41E thermistor temperature, converted with a compact lookup
+  table and integer interpolation.
 
 Frames with an invalid GPS fix still count as valid received frames and show
 their serial number, but no position is displayed.
@@ -90,4 +92,4 @@ Use only a frequency permitted by the Flipper's configured region.
 
 ## Version
 
-Current: **v0.1**.
+Current: **v0.2**.

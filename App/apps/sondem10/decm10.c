@@ -237,6 +237,14 @@ bool decm10_parse(decm10_t *d, sonde_info_t *out)
         o = digits(o, n & 0x1FFFu, 1000u); *o = 0;
     }
     out->flags = SONDE_HAS_ID;
+    {
+        uint8_t sc = f[0x3Eu];
+        uint16_t adc = (uint16_t)(f[0x3Fu] | ((uint16_t)f[0x40u] << 8));
+        if (sc < 3u && adc > 0xA000u && adc <= 0xAFFFu)
+            out->tRaw = (uint16_t)((adc - 0xA000u) | ((uint16_t)sc << 12));
+        else
+            out->tRaw = 0;
+    }
     if (f[2] != 0x20u || (f[0x1Du] & 1u)) return true;
 
     out->latS = binaryAngleToArcSec(f + 0x0Eu);

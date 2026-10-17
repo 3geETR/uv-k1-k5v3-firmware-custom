@@ -112,6 +112,12 @@ static char *putFreq(char *o, uint32_t f)
     *o++ = (char)('0' + subu(&f, 100u));
     return o;
 }
+static char *put1(char *o, int32_t v10)
+{
+    if (v10 < 0) { *o++ = '-'; v10 = -v10; }
+    o = puti(o, v10 / 10); *o++ = '.'; *o++ = (char)('0' + v10 % 10);
+    return o;
+}
 static void tiny(char *buf, uint8_t x, uint8_t y, char *end)
 { *end = '\0'; g.A->print_tiny(buf, x, y, false, true); }
 
@@ -163,6 +169,23 @@ static uint16_t adcRead(void)
     return (uint16_t)(ADC_DR & 0x0FFFu);
 }
 
+static void m10Temp(sonde_info_t *in)
+{
+    uint16_t tab[T_N], a = in->tRaw;
+    uint8_t sc = (uint8_t)(a >> 12);
+    a &= 0x0FFFu;
+    if (!a || sc >= 3u) return;
+    g.A->asset_read((uint16_t)(TEMP_TAB + sc * (T_N * 2u)), tab, sizeof tab);
+    for (uint8_t i = 0; i + 1u < T_N; i++) {
+        if (a <= tab[i] && a > tab[i + 1u]) {
+            in->temp_c10 = (int16_t)(i * 50 - (int)T_OFS10 +
+                                     50 * (tab[i] - a) / (tab[i] - tab[i + 1u]));
+            in->flags |= SONDE_HAS_TEMP;
+            return;
+        }
+    }
+}
+
 static void emit(char *buf, char *end)
 {
     *end = '\0';
@@ -203,6 +226,10 @@ static void draw(const char *s)
         emit(str, o);
         if (in->flags & SONDE_HAS_ALT) {
             o = put(str, s + T_ALT); o = puti(o, in->alt_m); o = put(o, s + T_M);
+            emit(str, o);
+        }
+        if (in->flags & SONDE_HAS_TEMP) {
+            o = put(str, s + T_TEMP); o = put1(o, in->temp_c10); o = put(o, s + T_C);
             emit(str, o);
         }
         g.A->print_bold(in->id, 0, 0, 0);
@@ -266,6 +293,7 @@ static void listen(const saved_hw_t *saved, const char *ui)
             sonde_info_t info;
             info.flags = 0;
             if (decm10_parse(&m10, &info)) {
+                m10Temp(&info);
                 g.info = info;
                 g.nOk++;
                 g.led = 3u; g.ledCnt = 0; g.A->led(true);

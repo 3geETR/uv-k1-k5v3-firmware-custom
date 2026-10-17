@@ -70,6 +70,8 @@ static void build_frame(uint8_t *f)
     put_be32(f + 0x12, 27440069);  /* 2.3 degrees */
     put_be32(f + 0x16, 1200000);   /* 1200 m in millimetres */
     f[0x1D] = 0;                   /* Valid 3D fix. */
+    f[0x3E] = 0;                   /* Thermistor range. */
+    f[0x3F] = 0x99; f[0x40] = 0xA5; /* About 20 C. */
     f[0x5D] = 0x0B;
     f[0x5F] = 0xA5;
     f[0x60] = 0xD2; f[0x61] = 0x24;
@@ -89,7 +91,8 @@ static int fields_ok(const sonde_info_t *out)
     return strcmp(out->id, "A05-B-11234") == 0 &&
            (out->flags & (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT)) ==
                (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT) &&
-           out->alt_m == 1200 && lat_err <= 1 && lon_err <= 1;
+           out->tRaw == 0x0599u && out->alt_m == 1200 &&
+           lat_err <= 1 && lon_err <= 1;
 }
 
 int main(void)

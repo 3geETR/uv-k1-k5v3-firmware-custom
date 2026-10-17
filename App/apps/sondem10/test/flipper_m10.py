@@ -42,6 +42,8 @@ def test_frame():
     put_be(frame, 0x12, round(2.3 * (1 << 32) / 360), 4)
     put_be(frame, 0x16, 1200000, 4)
     frame[0x1D] = 0
+    frame[0x3E] = 0
+    frame[0x3F:0x41] = (0xA599).to_bytes(2, "little")  # About 20 C.
     frame[0x5D] = 0x0B
     frame[0x5F] = 0xA5
     serial = (1 << 13) | 1234
@@ -107,7 +109,7 @@ def test_cases():
     bad_crc[0x0E] ^= 1
     chips = frame_chips(valid)
     return {
-        "valid": (chips, "A05-B-11234, 48.80000N 2.30000E, ALT 1200m"),
+        "valid": (chips, "A05-B-11234, 48.80000N 2.30000E, ALT 1200m, T 20.0C"),
         "inverted": ([1 ^ chip for chip in chips], "same frame, inverted RF polarity"),
         "badcrc": (frame_chips(bad_crc), "rejected: FRAME must not increment"),
     }

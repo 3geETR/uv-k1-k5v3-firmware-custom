@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import os
 import sys
 
@@ -13,6 +14,8 @@ UI = [
     ("T_NOPOS", "no position"),
     ("T_ALT", "ALT "),
     ("T_M", "m"),
+    ("T_TEMP", "T "),
+    ("T_C", "C"),
     ("T_FRAME", "FRAME "),
     ("T_DBM", "dBm"),
     ("T_KHZ", "kHz"),
@@ -36,4 +39,38 @@ a.u16("ATT_REG13", [0x03DF, 0x03DD, 0x03DB, 0x03D9, 0x0379, 0x0139])
 a.u8("ATT_DB", [0, 6, 15, 27])
 a.const("ATT_COUNT", 6)
 a.const("ATT_BYP0", 4)
+
+# M10 Shibaura PB5-41E thermistor. Tabulate the Steinhart-Hart conversion
+# every 5 C so the overlay only needs integer interpolation at runtime.
+SH = (1.07303516e-03, 2.41296733e-04, 2.26744154e-06, 6.52855181e-08)
+RS = (12.1e3, 36.5e3, 475.0e3)
+RP = (1e20, 330.0e3, 2000.0e3)
+T_MIN, T_STEP, T_N = -120, 5, 37
+
+
+def t_of_r(r):
+    l = math.log(r)
+    return 1.0 / (SH[0] + SH[1] * l + SH[2] * l * l + SH[3] * l ** 3) - 273.15
+
+
+def r_of_t(t):
+    lo, hi = 1.0, 1e12
+    for _ in range(200):
+        mid = math.sqrt(lo * hi)
+        if t_of_r(mid) > t:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+tab = []
+for sc in range(3):
+    for k in range(T_N):
+        r = r_of_t(T_MIN + T_STEP * k)
+        x = RS[sc] / r + RS[sc] / RP[sc]
+        tab.append(max(0, min(4095, int(round(4095.0 / (x + 1.0))))))
+a.u16("TEMP_TAB", tab)
+a.const("T_N", T_N)
+a.const("T_OFS10", -T_MIN * 10)
 a.main()

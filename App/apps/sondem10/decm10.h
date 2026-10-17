@@ -20,6 +20,6 @@ void decm10_init(decm10_t *d);
 void decm10_rearm(decm10_t *d);
 bool decm10_busy(const decm10_t *d);
 bool decm10_push(decm10_t *d, uint16_t sample);
-/* CRC-checked standard M10 (type 0x9F); fills ID, position and altitude. */
+/* CRC-checked standard M10; fills ID, thermistor data, position and altitude. */
 bool decm10_parse(decm10_t *d, sonde_info_t *out);
 #endif
