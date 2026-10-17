@@ -107,6 +107,12 @@ as `CFG M` or `CFG 1` to `CFG 4`, so several operating configurations can be
 used with the same firmware and compatible configurations can be shared across
 editions.
 
+A `SetCfg` override survives normal power cycles. It does not permanently
+redefine the default configuration bank of a firmware slot: selecting a
+firmware through Multiboot always restores the natural association between the
+selected slot and its bank (`Main` to `CFG M`, or slot `N` to `CFG N`). Select
+another bank with `SetCfg` again after switching firmware if required.
+
 ### Full Watch
 
 Full Watch extends the normal dual-watch cycle to monitor:
