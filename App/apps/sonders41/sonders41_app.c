@@ -112,6 +112,14 @@ static char *putFreq(char *o, uint32_t f)
     *o++ = (char)('0' + subu(&f, 100u));
     return o;
 }
+/* Signed tenths with a forced sign: +5.2, -0.4. */
+static char *putDm(char *o, int32_t v)
+{
+    uint32_t u = (uint32_t)(v < 0 ? -v : v);
+    *o++ = v < 0 ? '-' : '+';
+    o = puti(o, (int32_t)(u / 10u)); *o++ = '.'; *o++ = (char)('0' + u % 10u);
+    return o;
+}
 static void tiny(char *buf, uint8_t x, uint8_t y, char *end)
 { *end = '\0'; g.A->print_tiny(buf, x, y, false, true); }
 
@@ -204,6 +212,9 @@ static void draw(const char *s)
         if (in->flags & SONDE_HAS_ALT) {
             o = put(str, s + T_ALT); o = puti(o, in->alt_m); o = put(o, s + T_M);
             emit(str, o);
+            o = put(str, s + T_VS); o = putDm(o, in->vs_dm);
+            o = put(o, s + T_SAT); o = puti(o, in->sats);
+            emit(str, o);
         }
         g.A->print_bold(in->id, 0, 0, 0);
     }
@@ -249,6 +260,7 @@ static void listen(const saved_hw_t *saved, const char *ui)
 {
     decrs41_t rs41;
     decrs41_init(&rs41);
+    g.A->asset_read(RS41_TAB, rs41.arc, RS41_TAB_LEN);
     adcSelPA4(saved);
     uint32_t prev = SYST_VAL, cyc = 0, next = 0;
     uint16_t cnt = 0;

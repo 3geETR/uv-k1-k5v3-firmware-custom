@@ -33,17 +33,6 @@ enum { ST_SRCH = 0, ST_DATA = 1, ST_DONE = 2 };
 /* On-air sync 10 B6 CA 11 22 96 12 F8, first bit in bit 0. */
 #define SYNC0 0x11CAB610u
 #define SYNC1 0xF8129622u
-static const uint8_t MASK[64] = {
-    0x96,0x83,0x3E,0x51,0xB1,0x49,0x08,0x98,
-    0x32,0x05,0x59,0x0E,0xF9,0x44,0xC6,0x26,
-    0x21,0x60,0xC2,0xEA,0x79,0x5D,0x6D,0xA1,
-    0x54,0x69,0x47,0x0C,0xDC,0xE8,0x5C,0xF1,
-    0xF7,0x76,0x82,0x7F,0x07,0x99,0xA2,0x2C,
-    0x93,0x7C,0x30,0x63,0xF5,0x10,0x2E,0x61,
-    0xD0,0xBC,0xB4,0xB6,0x06,0xAA,0xF4,0x23,
-    0x78,0x6E,0x3B,0xAE,0xBF,0x7B,0x4C,0xC1
-};
-
 /* At most RS41_SYNC_ERR bits set in the 64 bits a:b. */
 static bool near64(uint32_t a, uint32_t b)
 {
@@ -168,6 +157,11 @@ static int32_t le32(const uint8_t *p)
                      ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
 }
 
+static int32_t le16(const uint8_t *p)
+{
+    return (int16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
 static uint32_t isqrt32(uint32_t n)
 {
     uint32_t root = 0, bit = 1u << 30;
@@ -201,13 +195,9 @@ static uint32_t isqrt64(uint64_t n)
     return (uint32_t)root;
 }
 
-/* CORDIC atan2, result in arc-seconds. */
-static int32_t atan2Arc(int32_t y, int32_t x)
+/* CORDIC atan2, result in arc-seconds; arc = atan(2^-i) (from the assets). */
+static int32_t atan2Arc(int32_t y, int32_t x, const uint32_t *arc)
 {
-    static const uint32_t arc[] = {
-        162000u, 95634u, 50530u, 25650u, 12875u, 6444u, 3223u,
-        1611u, 806u, 403u, 201u, 101u, 50u, 25u
-    };
     int32_t angle = 0;
     if (!x && !y) return 0;
     if (x < 0) {
@@ -215,7 +205,7 @@ static int32_t atan2Arc(int32_t y, int32_t x)
         x = -x;
         y = -y;
     }
-    for (uint8_t i = 0; i < sizeof arc / sizeof arc[0]; i++) {
+    for (uint8_t i = 0; i < RS41_ARC_N; i++) {
         int32_t ox = x;
         if (y > 0) {
             x += y >> i;
@@ -230,7 +220,7 @@ static int32_t atan2Arc(int32_t y, int32_t x)
     return angle;
 }
 
-static bool ecef(const uint8_t *p, sonde_info_t *out)
+static bool ecef(const uint8_t *p, sonde_info_t *out, const uint32_t *arc)
 {
     int32_t x = le32(p), y = le32(p + 4), z = le32(p + 8);
     int32_t x100 = x / 10000, y100 = y / 10000, z100 = z / 10000;
@@ -249,17 +239,25 @@ static bool ecef(const uint8_t *p, sonde_info_t *out)
     corr = (corr * q) >> 15;
     alt = (int32_t)radiusM - (int32_t)(6378137u - corr);
     if (alt < -1000 || alt > 50000) return false;
-    out->lonS = atan2Arc(y100, x100);
-    out->latS = atan2Arc(z100, (int32_t)((horizontal * 9933u) / 10000u));
+    out->lonS = atan2Arc(y100, x100, arc);
+    out->latS = atan2Arc(z100, (int32_t)((horizontal * 9933u) / 10000u), arc);
     out->alt_m = alt;
+    /* ECEF velocity (cm/s) projected on the local vertical: x100.v is in
+     * 100 m.cm/s, so dividing by the radius in 10 m gives dm/s. It fits an
+     * int32 below 330 m/s. */
+    {
+        int32_t dot = x100 * le16(p + 12) + y100 * le16(p + 14) + z100 * le16(p + 16);
+        out->vs_dm = (int16_t)(dot / (int32_t)(radiusM / 10u));
+    }
+    out->sats = p[18];
     return true;
 }
 
 /* De-whiten one frame and read it; out is valid only on success. */
-static bool frameOk(uint8_t *f, sonde_info_t *out)
+static bool frameOk(const decrs41_t *d, uint8_t *f, sonde_info_t *out)
 {
     const uint16_t statusPos = 0x39u, gpsPos = 0x112u;
-    for (uint16_t i = 8u; i < RS41_FRAME_LEN; i++) f[i] ^= MASK[i & 63u];
+    for (uint16_t i = 8u; i < RS41_FRAME_LEN; i++) f[i] ^= d->mask[i & 63u];
     if (!blockOk(f, statusPos, 0x79u, 40u)) return false;
     for (uint8_t i = 0; i < 8u; i++) {
         uint8_t c = f[statusPos + 4u + i];
@@ -268,7 +266,7 @@ static bool frameOk(uint8_t *f, sonde_info_t *out)
     }
     out->id[8] = 0;
     out->flags = SONDE_HAS_ID;
-    if (blockOk(f, gpsPos, 0x7Bu, 21u) && ecef(f + gpsPos + 2u, out))
+    if (blockOk(f, gpsPos, 0x7Bu, 21u) && ecef(f + gpsPos + 2u, out, d->arc))
         out->flags |= SONDE_HAS_POS | SONDE_HAS_ALT;
     return true;
 }
@@ -279,7 +277,7 @@ bool decrs41_parse(decrs41_t *d, sonde_info_t *out)
         rs41sl_t *s = &d->sl[k];
         if (s->state != ST_DONE) continue;
         /* The other slicer is reading the same burst: drop it on success. */
-        if (frameOk(s->frm, out)) { decrs41_rearm(d); return true; }
+        if (frameOk(d, s->frm, out)) { decrs41_rearm(d); return true; }
         slRearm(s);
     }
     return false;

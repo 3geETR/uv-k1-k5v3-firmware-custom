@@ -48,6 +48,17 @@ def ecef(latitude, longitude, altitude):
     return tuple(round(value * 100) for value in (x, y, z))
 
 
+def ecef_velocity(latitude, longitude, east, north, up):
+    """Local east/north/up speeds (m/s) as ECEF components in cm/s."""
+    lat = math.radians(latitude)
+    lon = math.radians(longitude)
+    sl, cl, so, co = math.sin(lat), math.cos(lat), math.sin(lon), math.cos(lon)
+    v = (-so * east - sl * co * north + cl * co * up,
+         co * east - sl * so * north + cl * so * up,
+         cl * north + sl * up)
+    return tuple(round(value * 100) for value in v)
+
+
 def test_frame():
     frame = bytearray(FRAME_LEN)
     frame[:8] = CLEAR_SYNC
@@ -65,6 +76,9 @@ def test_frame():
     frame[gps + 1] = 21
     for index, value in enumerate(ecef(48.8, 2.3, 1200)):
         frame[gps + 2 + index * 4:gps + 6 + index * 4] = value.to_bytes(4, "little", signed=True)
+    # Climbing at 5.2 m/s with the wind carrying it east-south-east.
+    for index, value in enumerate(ecef_velocity(48.8, 2.3, 8.0, -3.0, 5.2)):
+        frame[gps + 14 + index * 2:gps + 16 + index * 2] = value.to_bytes(2, "little", signed=True)
     frame[gps + 20] = 8
     finish_block(frame, gps)
     return frame
@@ -119,7 +133,7 @@ def test_cases():
     bad_crc[0x39 + 4] ^= 1
     bits = wire_bits(valid)
     return {
-        "valid": (bits, "S1234567, 48.80000N 2.30000E, ALT about 1200m"),
+        "valid": (bits, "S1234567, 48.80000N 2.30000E, ALT about 1200m, VS +5.2m/s SAT 8"),
         "inverted": ([1 ^ bit for bit in bits], "same frame, inverted RF polarity"),
         "badcrc": (wire_bits(bad_crc), "rejected: FRAME must not increment"),
     }

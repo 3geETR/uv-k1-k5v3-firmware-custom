@@ -2,11 +2,12 @@
 
 Receive-only overlay application for standard Vaisala RS41 radiosondes. It
 samples the BK4829 AF output on PA4, validates RS41 STATUS and GPS sub-blocks,
-and displays the serial number, GPS position, and altitude.
+and displays the serial number, GPS position, altitude, vertical speed, and
+the number of GPS satellites.
 
 ## Status
 
-Version 0.1 implements the common 320-byte RS41 frame at 4800 bit/s. The
+Version 0.2 implements the common 320-byte RS41 frame at 4800 bit/s. The
 parser, CRC path, normal RF polarity, and inverted RF polarity have synthetic
 host tests, and `test/model_rx.py` runs the demodulator through a model of the
 radio's RAW audio path. Reception on a UV-K1 or UV-K5 V3 has been validated
@@ -68,7 +69,9 @@ false sync.
 - common 320-byte frame;
 - CRC-16/CCITT-FALSE STATUS (`0x79`) and GPS (`0x7B`) sub-blocks;
 - eight-character sonde serial number;
-- GPS ECEF position converted to latitude, longitude, and altitude.
+- GPS ECEF position converted to latitude, longitude, and altitude;
+- GPS ECEF velocity projected on the local vertical (`VS`, m/s, positive
+  while climbing) and the number of satellites used (`SAT`).
 
 ## Build
 
@@ -101,4 +104,4 @@ Use only a frequency permitted by the Flipper's configured region.
 
 ## Version
 
-Current: **v0.1**.
+Current: **v0.2**.

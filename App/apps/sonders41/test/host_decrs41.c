@@ -17,6 +17,19 @@ static const uint8_t MASK[64] = {
     0x78,0x6E,0x3B,0xAE,0xBF,0x7B,0x4C,0xC1
 };
 
+static const uint32_t ARC[RS41_ARC_N] = {
+    162000u, 95634u, 50530u, 25650u, 12875u, 6444u, 3223u,
+    1611u, 806u, 403u, 201u, 101u, 50u, 25u
+};
+
+/* decrs41_init, then the tables the app reads from its assets. */
+static void initDec(decrs41_t *d)
+{
+    decrs41_init(d);
+    memcpy(d->arc, ARC, sizeof ARC);
+    memcpy(d->mask, MASK, sizeof MASK);
+}
+
 static uint16_t crc16(const uint8_t *p, uint8_t len)
 {
     uint16_t crc = 0xFFFFu;
@@ -38,6 +51,12 @@ static void put32(uint8_t *p, int32_t v)
     p[1] = (uint8_t)(u >> 8);
     p[2] = (uint8_t)(u >> 16);
     p[3] = (uint8_t)(u >> 24);
+}
+
+static void put16(uint8_t *p, int16_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)((uint16_t)v >> 8);
 }
 
 static void finishBlock(uint8_t *f, uint16_t pos)
@@ -72,6 +91,10 @@ static void makeFrame(uint8_t *clear, uint8_t *wire)
     put32(gps + 2, 420659420);
     put32(gps + 6, 16895428);
     put32(gps + 10, 477684060);
+    /* ECEF velocity in cm/s: 5.2 m/s up, 8 m/s east, 3 m/s south. */
+    put16(gps + 14, 536);
+    put16(gps + 16, 822);
+    put16(gps + 18, 194);
     gps[20] = 8;
     finishBlock(clear, 0x112);
 
@@ -94,7 +117,7 @@ static void checkParse(void)
     decrs41_t d;
     sonde_info_t info = {0};
     makeFrame(clear, wire);
-    decrs41_init(&d);
+    initDec(&d);
     loadWire(&d, wire);
     assert(decrs41_parse(&d, &info));
     assert(!strcmp(info.id, "S1234567"));
@@ -103,8 +126,10 @@ static void checkParse(void)
     assert(info.latS > 175500 && info.latS < 175900);
     assert(info.lonS > 8100 && info.lonS < 8500);
     assert(info.alt_m > 1150 && info.alt_m < 1250);
+    assert(info.vs_dm >= 51 && info.vs_dm <= 53);
+    assert(info.sats == 8u);
 
-    decrs41_init(&d);
+    initDec(&d);
     wire[0x112 + 4] ^= 1u;
     loadWire(&d, wire);
     memset(&info, 0, sizeof info);
@@ -112,7 +137,7 @@ static void checkParse(void)
     assert(info.flags == SONDE_HAS_ID);
 
     makeFrame(clear, wire);
-    decrs41_init(&d);
+    initDec(&d);
     wire[0x39 + 4] ^= 1u;
     loadWire(&d, wire);
     assert(!decrs41_parse(&d, &info));
@@ -130,7 +155,7 @@ static void checkDemod(bool inverted)
     decrs41_t d;
     sonde_info_t info = {0};
     makeFrame(clear, wire);
-    decrs41_init(&d);
+    initDec(&d);
     for (uint16_t i = 0; i < 320u; i++) feedBit(&d, i & 1u, inverted);
     for (uint16_t i = 0; i < RS41_FRAME_LEN; i++)
         for (uint8_t b = 0; b < 8u; b++)
