@@ -56,20 +56,12 @@ static struct globals g;
 
 _Static_assert(offsetof(struct globals, inBox) + 4u <= 32u, "byte fields out of ldrb range");
 
-/* Decimal digits of v (< 10000), no leading zeros, by subtracting the places:
- * no division is linked. */
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
 static char *putu(char *o, uint16_t v)
 {
-    uint16_t place[PLACE_LEN / 2u];
-    A->asset_read(PLACE, place, sizeof(place));
-    bool lead = true;
-    for (uint8_t i = 0; i < PLACE_LEN / 2u; i++) {
-        uint8_t d = 0;
-        while (v >= place[i]) { v -= place[i]; d++; }
-        if (d || i == PLACE_LEN / 2u - 1u) lead = false;
-        if (!lead) *o++ = (char)('0' + d);
-    }
-    return o;
+    return A->append_u32(o, v);
 }
 
 /* Texts, band names and the F icon are read-only assets (gen_assets.py).

@@ -83,22 +83,12 @@ typedef struct {
 
 _Static_assert(sizeof(config_t) <= 16u, "CW Decode config exceeds overlay slot");
 
-typedef struct {
-    char morse[MORSE_TREE_LEN];
-    uint32_t decimalPlaces[DECIMAL_PLACES_LEN / 4u];
-} asset_tables_t;
-
-_Static_assert(DECIMAL_PLACES == MORSE_TREE + MORSE_TREE_LEN,
-               "CW Decode lookup assets must remain contiguous");
-_Static_assert(sizeof(asset_tables_t) == MORSE_TREE_LEN + DECIMAL_PLACES_LEN,
-               "CW Decode lookup cache must not contain padding");
 _Static_assert(BMP_CAL_SCREEN_LEN == 4u * 128u,
                "CW Decode calibration screen must cover LCD pages 1 through 4");
 
 static struct {
     const app_api_t *A;
     const char *morse;
-    const uint32_t *decimalPlaces;
     bool running, down, candidate, fArm, redraw, follow, keyRedraw, morseRedraw;
     bool help;
     bool agc, speaker;
@@ -133,32 +123,14 @@ static char *put(char *out, const char *text)
     return out;
 }
 
-static char *putu(char *out, uint32_t value)
-{
-    bool started = false;
-    for (uint8_t i = 0u; i < DECIMAL_PLACES_LEN / 4u; i++) {
-        const uint32_t place = g.decimalPlaces[i];
-        uint8_t digit = 0u;
-        while (value >= place) {
-            value -= place;
-            digit++;
-        }
-        if (digit || started || place == 1u) {
-            *out++ = (char)('0' + digit);
-            started = true;
-        }
-    }
-    return out;
-}
-
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
 static char *puti(char *out, int32_t value)
 {
-    if (value < 0) {
-        *out++ = '-';
-        value = -value;
-    }
-    return putu(out, (uint32_t)value);
+    return A->append_i32(out, value);
 }
+#define putu puti
 
 static void configureCwRx(void)
 {
@@ -742,15 +714,14 @@ static void handleKey(uint8_t key)
 __attribute__((section(".text.entry"), used))
 void app_main(const app_api_t *api)
 {
-    asset_tables_t tables;
+    char morse[MORSE_TREE_LEN];
     /* History lives for the whole modal call but stays outside the 4 KiB
      * overlay image, following the larger-buffer overlay apps. */
     char text[TEXT_CAP + 1u];
     A = api;
-    g.morse = tables.morse;
-    g.decimalPlaces = tables.decimalPlaces;
+    g.morse = morse;
     g.text = text;
-    A->asset_read(MORSE_TREE, &tables, sizeof(tables));
+    A->asset_read(MORSE_TREE, morse, sizeof(morse));
     g.running = true;
     g.follow = true;
     g.help = false;

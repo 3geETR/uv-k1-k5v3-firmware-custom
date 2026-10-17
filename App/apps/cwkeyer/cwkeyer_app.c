@@ -180,18 +180,12 @@ static char *put(char *out, const char *s)
     return out;
 }
 
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
 static char *putu(char *out, uint32_t value)
 {
-    char tmp[10];
-    uint8_t n = 0u;
-    do {
-        const uint64_t qr = A->uidivmod(value, 10u);
-        tmp[n++] = (char)('0' + (uint32_t)(qr >> 32));
-        value = (uint32_t)qr;
-    } while (value);
-    while (n)
-        *out++ = tmp[--n];
-    return out;
+    return A->append_u32(out, value);
 }
 
 static char *putCalibration(char *out)

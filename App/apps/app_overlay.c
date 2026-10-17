@@ -508,6 +508,154 @@ static uint16_t app_asset_read(uint16_t offset, void *buf, uint16_t len)
 extern uint64_t __aeabi_idivmod(int32_t n, int32_t d);
 extern uint64_t __aeabi_uidivmod(uint32_t n, uint32_t d);
 
+/* ---- API level 3: number formatting ----
+ * One resident copy of the decimal formatter nearly every app carried: the
+ * digits come out least significant first, one __aeabi_uidivmod each (GCC
+ * would call the divide twice for u % 10 and u / 10), then are copied back in
+ * order. Not NUL-terminated, returns the end. */
+static char *app_append_u32(char *dst, uint32_t u)
+{
+    char digits[10];
+    char *p = digits + sizeof(digits);
+    do {
+        const uint64_t qr = __aeabi_uidivmod(u, 10u);
+        *--p = (char)('0' + (uint32_t)(qr >> 32));
+        u = (uint32_t)qr;
+    } while (u);
+    do
+        *dst++ = *p++;
+    while (p < digits + sizeof(digits));
+    return dst;
+}
+
+static char *app_append_i32(char *dst, int32_t v)
+{
+    uint32_t u = (uint32_t)v;
+    if (v < 0) {
+        *dst++ = '-';
+        u = 0u - u;
+    }
+    return app_append_u32(dst, u);
+}
+
+/* ---- API level 3: the frequency as the main screen draws it ----
+ * ui/main.c with ENABLE_BIG_FREQ: below 1 GHz, "144.800" in the big digits,
+ * then the last two digits ("00") in the small font on the lower line, right
+ * after them (95 px in all); from 1 GHz, the whole string in the normal font
+ * (80 px). The drawing routines do not clip, so x is held where both fit. */
+#define APP_FREQ_X_MAX  (128u - 95u)
+
+static void app_draw_frequency(uint32_t f_10hz, uint8_t x, uint8_t line)
+{
+    char s[16];
+    const uint64_t mhz = __aeabi_uidivmod(f_10hz, 100000u);
+    uint32_t rest = (uint32_t)(mhz >> 32);
+    char *o = app_append_u32(s, (uint32_t)mhz);
+    *o++ = '.';
+    for (char *d = o + 5; d > o; ) {
+        const uint64_t qr = __aeabi_uidivmod(rest, 10u);
+        *--d = (char)('0' + (uint32_t)(qr >> 32));
+        rest = (uint32_t)qr;
+    }
+    o[5] = '\0';
+    if (x > APP_FREQ_X_MAX)
+        x = APP_FREQ_X_MAX;
+    if ((uint32_t)mhz >= 1000u) {
+        UI_PrintString(s, x, 0, line, 8);
+        return;
+    }
+    o += 3;                          /* the last two digits */
+    UI_PrintStringSmallNormal(o, (uint8_t)(x + (o - s - 1) * 13 + 3), 0, (uint8_t)(line + 1u));
+    *o = '\0';
+    UI_DisplayFrequency(s, x, line, false);
+}
+
+/* ---- API level 3: RX audio capture on PA4 ----
+ * The sequence the PA4 apps proved on the radio (EPIRB 406 first): PA4 has no
+ * DC reference of its own, so the MCU DAC (channel 1, output buffer off,
+ * software trigger) holds it at mid-scale for the whole capture; the ADC reads
+ * channel 4 with the sample time the battery channel 8 was given. One app
+ * runs at a time, so the snapshot lives here instead of in each overlay. */
+#define APP_AFC_ADC_CH_PA4  4u
+#define APP_AFC_SMP4_POS    12u
+#define APP_AFC_SMP8_POS    24u
+#define APP_AFC_DAC_BIAS    ((1u << 0) | (1u << 1) | (1u << 2) | (7u << 3))  /* EN1 BOFF1 TEN1 TSEL1=111 */
+#define APP_AFC_BIAS_CODE   2048u
+
+static struct {
+    uint32_t moder, rcc, dac, dhr, sqr3, smpr3;
+    bool     open;
+} app_afc;
+
+static void app_afc_select_pa4(void)
+{
+    ADC1->SMPR3 = (app_afc.smpr3 & ~(7u << APP_AFC_SMP4_POS)) |
+                  (((app_afc.smpr3 >> APP_AFC_SMP8_POS) & 7u) << APP_AFC_SMP4_POS);
+    ADC1->SQR3  = (app_afc.sqr3 & ~0x1Fu) | APP_AFC_ADC_CH_PA4;
+}
+
+static void app_afc_select_battery(void)
+{
+    ADC1->SQR3  = app_afc.sqr3;
+    ADC1->SMPR3 = app_afc.smpr3;
+}
+
+static void app_af_capture_open(void)
+{
+    if (app_afc.open)
+        return;
+    app_afc.moder = GPIOA->MODER;
+    app_afc.rcc   = RCC->APBENR1;
+    app_afc.dac   = DAC1->CR;
+    app_afc.dhr   = DAC1->DHR12R1;
+    app_afc.sqr3  = ADC1->SQR3;
+    app_afc.smpr3 = ADC1->SMPR3;
+    app_afc.open  = true;
+    GPIOA->MODER  = app_afc.moder | (3u << 8);      /* PA4 analog */
+    RCC->APBENR1  = app_afc.rcc | RCC_APBENR1_DACEN;
+    DAC1->CR      = APP_AFC_DAC_BIAS;
+    DAC1->DHR12R1 = APP_AFC_BIAS_CODE;
+    DAC1->SWTRIGR = 1u;                             /* DHR -> DOR */
+    app_afc_select_pa4();
+}
+
+static uint16_t app_af_capture_sample(void)
+{
+    ADC1->CR2 |= ADC_CR2_SWSTART | ADC_CR2_EXTTRIG;
+    for (uint16_t n = 0; !(ADC1->SR & ADC_SR_EOC) && n < 2000u; n++) {}
+    return (uint16_t)(ADC1->DR & 0x0FFFu);
+}
+
+static void app_af_capture_close(void)
+{
+    if (!app_afc.open)
+        return;
+    app_afc.open = false;
+    app_afc_select_battery();
+    DAC1->CR      = app_afc.dac;
+    DAC1->DHR12R1 = app_afc.dhr;
+    RCC->APBENR1  = app_afc.rcc;
+    GPIOA->MODER  = app_afc.moder;
+}
+
+/* ---- API level 3: 48 MHz cycle clock ----
+ * Re-read the tick until it is stable around the SysTick read. A reload the
+ * interrupt has not served yet leaves the tick one behind: then count it and
+ * take a fresh, post-reload phase. */
+static uint32_t app_cycles_48mhz(void)
+{
+    uint32_t tick, val;
+    do {
+        tick = SCHEDULER_GetTick10ms();
+        val  = SysTick->VAL;
+    } while (tick != SCHEDULER_GetTick10ms());
+    if (SCB->ICSR & SCB_ICSR_PENDSTSET_Msk) {
+        val = SysTick->VAL;
+        tick++;
+    }
+    return tick * (SysTick->LOAD + 1u) + (SysTick->LOAD - val);
+}
+
 /* ---- v2 battery / backlight ---- */
 static void app_draw_battery(void)
 {
@@ -516,7 +664,14 @@ static void app_draw_battery(void)
 }
 static void app_battery_sample(void)
 {
+    /* The battery is on ADC channel 8: an open capture yields it for the
+     * sample, then takes PA4 back. */
+    const bool capture = app_afc.open;
+    if (capture)
+        app_afc_select_battery();
     BATTERY_Sample(false);
+    if (capture)
+        app_afc_select_pa4();
 }
 
 /* ---- v2 TX (beacon) ---- */
@@ -872,6 +1027,13 @@ static const app_api_t app_api = {
     .sys_stack_free_now  = STACK_FreeNow,
     .sys_stack_free_min  = STACK_FreeMinimum,
 #endif
+    .append_i32          = app_append_i32,
+    .af_capture_open     = app_af_capture_open,
+    .af_capture_sample   = app_af_capture_sample,
+    .af_capture_close    = app_af_capture_close,
+    .cycles_48mhz        = app_cycles_48mhz,
+    .draw_frequency      = app_draw_frequency,
+    .append_u32          = app_append_u32,
 };
 
 uint8_t APP_LaunchOverlay(uint8_t slot)
@@ -969,6 +1131,9 @@ uint8_t APP_LaunchOverlay(uint8_t slot)
 
     app_entry_t entry = (app_entry_t)(((uint32_t)ws + h.entry_off) | 1u);
     entry(&app_api);
+
+    /* A capture the app left open must not keep PA4 and the DAC. */
+    app_af_capture_close();
 
     /* First thing after the app: nothing has drawn over its last screen yet. */
     if (h.flags & APP_FLAG_SAVE_SCREEN)

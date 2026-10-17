@@ -105,9 +105,6 @@ for index, char in {
     morse[index] = ord(char)
 a.raw("MORSE_TREE", morse)
 
-# Decimal places are cached once by the app and avoid divisions in the
-# frequently refreshed signal and frequency formatting paths.
-a.u32("DECIMAL_PLACES", [10 ** exponent for exponent in range(9, -1, -1)])
 
 up = [0x04, 0x06, 0x07, 0x06, 0x04]
 down = [0x10, 0x30, 0x70, 0x30, 0x10]

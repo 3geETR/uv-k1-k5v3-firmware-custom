@@ -21,26 +21,7 @@ void *memcpy(void *d, const void *s, size_t n)
     return d;
 }
 
-#define SYST_LOAD   (*(volatile uint32_t *)0xE000E014u)
-#define SYST_VAL    (*(volatile uint32_t *)0xE000E018u)
-#define ADC_SR      (*(volatile uint32_t *)0x40012400u)
-#define ADC_CR2     (*(volatile uint32_t *)0x40012408u)
-#define ADC_SMPR3   (*(volatile uint32_t *)0x40012414u)
-#define ADC_SQR3    (*(volatile uint32_t *)0x40012438u)
-#define ADC_DR      (*(volatile uint32_t *)0x40012450u)
-#define GPIOA_MODER (*(volatile uint32_t *)0x50000000u)
-#define DAC_CR      (*(volatile uint32_t *)0x40007400u)
-#define DAC_SWTRIGR (*(volatile uint32_t *)0x40007404u)
-#define DAC_DHR12R1 (*(volatile uint32_t *)0x40007408u)
-#define RCC_APBENR1 (*(volatile uint32_t *)0x4002103Cu)
-#define RCC_DACEN   (1u << 29)
-#define DAC_CR_BIAS ((1u << 0)|(1u << 1)|(1u << 2)|(7u << 3))
-#define BIAS_CODE   2048u
-#define ADC_SR_EOC     (1u << 1)
-#define ADC_CR2_START  ((1u << 22)|(1u << 20))
-#define SMP8_POS 24u
-#define SMP4_POS 12u
-#define ADC_CH_PA4 4u
+/* PA4 audio capture and the cycle clock are resident (API level 3). */
 #define FS 19200u
 #define CYC_PER_SAMPLE (48000000u / FS)
 #define REG_2B 0x2B
@@ -66,7 +47,6 @@ void *memcpy(void *d, const void *s, size_t n)
 #define ATT_SETTLE 40
 
 typedef struct { uint8_t spk, att; } app_cfg_t;
-typedef struct { uint32_t sqr3, smpr3, moder, dac, rcc, dhr; } saved_hw_t;
 
 static struct {
     const app_api_t *A;
@@ -83,17 +63,10 @@ static struct {
 
 static char *put(char *o, const char *s){ while (*s) *o++ = *s++; return o; }
 static uint8_t subu(uint32_t *v, uint32_t d){ uint8_t q = 0; while (*v >= d) { *v -= d; q++; } return q; }
-static char *puti(char *o, int32_t v)
-{
-    static const uint16_t P[] = { 10000u, 1000u, 100u, 10u, 1u };
-    uint32_t u = (uint32_t)(v < 0 ? (*o++ = '-', -v) : v);
-    bool lead = false;
-    for (uint8_t i = 0; i < 5u; i++) {
-        uint8_t c = subu(&u, P[i]);
-        if (c || lead || i == 4u) { *o++ = (char)('0' + c); lead = true; }
-    }
-    return o;
-}
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
+static char *puti(char *o, int32_t v){ return g.A->append_i32(o, v); }
 static char *putPos(char *o, int32_t s, char pos, char neg)
 {
     uint32_t a = (uint32_t)(s < 0 ? -s : s);
@@ -150,27 +123,6 @@ static char *putAttVal(char *o, const char *s)
 }
 static char *putAtt(char *o, const char *s)
 { return putAttVal(put(o, s + T_ATT), s); }
-static void biasOn(const saved_hw_t *s)
-{
-    GPIOA_MODER = s->moder | (3u << 8);
-    RCC_APBENR1 = s->rcc | RCC_DACEN;
-    DAC_CR = DAC_CR_BIAS; DAC_DHR12R1 = BIAS_CODE; DAC_SWTRIGR = 1u;
-}
-static void biasOff(const saved_hw_t *s)
-{ DAC_CR = s->dac; DAC_DHR12R1 = s->dhr; RCC_APBENR1 = s->rcc; GPIOA_MODER = s->moder; }
-static void adcSelPA4(const saved_hw_t *s)
-{
-    ADC_SMPR3 = (s->smpr3 & ~(7u << SMP4_POS)) | (((s->smpr3 >> SMP8_POS) & 7u) << SMP4_POS);
-    ADC_SQR3 = (s->sqr3 & ~0x1Fu) | ADC_CH_PA4;
-}
-static void adcRestore(const saved_hw_t *s){ ADC_SQR3 = s->sqr3; ADC_SMPR3 = s->smpr3; }
-static uint16_t adcRead(void)
-{
-    ADC_CR2 |= ADC_CR2_START;
-    for (uint16_t n = 0; !(ADC_SR & ADC_SR_EOC) && n < 2000u; n++) {}
-    return (uint16_t)(ADC_DR & 0x0FFFu);
-}
-
 static void emit(char *buf, char *end)
 {
     *end = '\0';
@@ -256,25 +208,23 @@ static bool handleKey(uint8_t key)
 }
 
 __attribute__((noinline))
-static void listen(const saved_hw_t *saved, const char *ui)
+static void listen(const char *ui)
 {
     decrs41_t rs41;
     decrs41_init(&rs41);
     g.A->asset_read(RS41_TAB, rs41.arc, RS41_TAB_LEN);
-    adcSelPA4(saved);
-    uint32_t prev = SYST_VAL, cyc = 0, next = 0;
+    /* The two per-sample services, held in registers: their table slots lie
+     * past the ldr immediate range. */
+    uint32_t (*const clk)(void) = g.A->cycles_48mhz;
+    uint16_t (*const sample)(void) = g.A->af_capture_sample;
+    uint32_t next = clk();
     uint16_t cnt = 0;
     uint8_t armedRefresh = 0;
     while (g.running) {
-        uint32_t v;
-        do {
-            v = SYST_VAL;
-            cyc += (v <= prev) ? prev - v : prev + (SYST_LOAD + 1u - v);
-            prev = v;
-        } while (cyc < next);
+        while ((int32_t)(clk() - next) < 0) {}
         next += CYC_PER_SAMPLE;
         bool wantUi = false;
-        if (decrs41_push(&rs41, adcRead())) {
+        if (decrs41_push(&rs41, sample())) {
             sonde_info_t info;
             info.flags = 0;
             if (decrs41_parse(&rs41, &info)) {
@@ -299,33 +249,26 @@ static void listen(const saved_hw_t *saved, const char *ui)
         if (wantUi || keyUi || !fastPoll || ++armedRefresh >= ARMED_REFRESH_SLOTS) {
             armedRefresh = 0;
             g.rssi = g.A->rssi_dbm();
-            adcRestore(saved);
-            g.A->battery_sample();
-            adcSelPA4(saved);
+            g.A->battery_sample();       /* yields the capture's ADC itself */
             draw(ui);
             g.A->blit_status();
             g.A->blit_full();
             g.A->backlight_on();
         }
         decrs41_rearm(&rs41);
-        prev = SYST_VAL;
-        next = cyc + CYC_PER_SAMPLE;
+        next = clk() + CYC_PER_SAMPLE;  /* skip the samples the slot took */
     }
-    adcRestore(saved);
 }
 
 __attribute__((section(".text.entry"), used))
 void app_main(const app_api_t *api)
 {
-    saved_hw_t saved;
     uint8_t cfg[4];
     char ui[UI_SIZE] __attribute__((aligned(4)));
     Gdiv = api; g.A = api; g.prevKey = APP_KEY_INVALID; api->led(false);
     api->asset_read(0, ui, UI_SIZE);
 
-    saved.sqr3 = ADC_SQR3; saved.smpr3 = ADC_SMPR3; saved.moder = GPIOA_MODER;
-    saved.dac = DAC_CR; saved.rcc = RCC_APBENR1; saved.dhr = DAC_DHR12R1;
-    biasOn(&saved);
+    api->af_capture_open();
     api->backlight_on();
     g.vfoFreq = api->rx_freq();
     api->bk_write(REG_2B, (uint16_t)((api->bk_read(REG_2B) | 0x0700u) & ~0x0007u));
@@ -344,12 +287,12 @@ void app_main(const app_api_t *api)
     api->bk_write(REG_47, REG_47_RS41);
     api->delay_ms(50);
     g.running = true;
-    listen(&saved, ui);
+    listen(ui);
     if (g.offSteps) { g.offSteps = 0; tune(); }
     api->bk_write(BK_REG_13, r13);
     api->set_agc(true);
     api->bk_write(REG_43, r43);
-    biasOff(&saved);
+    api->af_capture_close();
     api->set_af(APP_AF_MUTE);
     api->audio_path(false);
     api->led(false);

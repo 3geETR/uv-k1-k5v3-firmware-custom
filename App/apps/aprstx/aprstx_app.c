@@ -141,20 +141,13 @@ void *memcpy(void *d, const void *s, size_t n) {
 static char *put(char *o,const char *s){ while(*s)*o++=*s++; return o; }
 /* Formatting by repeated subtraction: no division. Values printed stay below 100000. */
 static uint8_t sub(uint32_t *v,uint32_t d){ uint8_t q=0; while(*v>=d){ *v-=d; q++; } return q; }
-static const uint16_t P10[]={10000u,1000u,100u,10u,1u};
 /* Beacon intervals in minutes, cycled by key 3; index 0 is off. */
 static const uint8_t IV_MIN[]={0u,1u,5u,15u,30u,60u};
 #define IV_COUNT    (sizeof IV_MIN)
-static char *puti(char *o,int32_t v){
-    uint32_t u;
-    if(v<0){*o++='-';u=(uint32_t)(-v);} else u=(uint32_t)v;
-    bool lead=false;
-    for(uint8_t i=0;i<5;i++){
-        uint8_t c=sub(&u,P10[i]);
-        if(c||lead||i==4u){ *o++=(char)('0'+c); lead=true; }
-    }
-    return o;
-}
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
+static char *puti(char *o,int32_t v){ return g.A->append_i32(o,v); }
 /* A tiny row holds 32 characters (4 px each): print_tiny does not clip, so
  * every row built below stays within that. */
 static void tiny(uint8_t y,char *end){ *end='\0'; g.A->print_tiny(str,0,y,false,true); }
@@ -199,27 +192,6 @@ static char *brk(char *o){
     emit(o);
     return str;
 }
-/* The frequency (10 Hz units) drawn as the main screen draws it (ui/main.c,
- * ENABLE_BIG_FREQ): the big digits up to the kHz on lines 4-5, the last two
- * digits in the small font on line 5 right after them (from 1 GHz, the whole
- * string in the big font). The group is aligned left to reserve the rightmost
- * 20 columns for the APRS symbol. Big digits are 13 px (drawn from +2), the
- * point 3 px. No division. */
-static void drawFreq(uint32_t f){
-    const app_api_t *A=g.A;
-    uint16_t m=0;
-    while(f>=100000u){ f-=100000u; m++; }
-    char *o=puti(str,m);
-    *o++='.';
-    for(uint8_t i=0;i<5u;i++) *o++=(char)('0'+sub(&f,P10[i]));
-    *o='\0';
-    uint8_t n=(uint8_t)(o-str), big=(uint8_t)(n-3u);    /* digits before "00" */
-    if(m>=1000u){ A->print_string(str,0,0,4,8); return; }
-    A->print_normal(str+n-2u,(uint8_t)(big*13u+3u),0,5);     /* "00"      */
-    str[n-2u]='\0';
-    A->display_freq(str,0,4,false);                          /* "144.800" */
-}
-
 #define SYM_X 108u
 _Static_assert(SYM_X+SYM_W<=128u,"APRS symbol must fit on screen");
 static void drawSymbol(uint8_t x,uint8_t sym){
@@ -427,7 +399,7 @@ static void draw(void){
          * whatever the shift brought there (the big digits start at y = 33: one
          * blank px between) */
     for(uint8_t x=0;x<128u;x++) b[384u+x]=(uint8_t)((b[384u+x]&0x7Fu)|((~x&1u)<<7));
-    drawFreq(A->tx_freq());
+    g.A->draw_frequency(A->tx_freq(),0,4);   /* the main screen's big digits, lines 4-5 */
     drawSymbol(SYM_X,g.sym);
 
         /* bottom line: "lvl 66  tw +0  sent 3", or why nothing was sent */

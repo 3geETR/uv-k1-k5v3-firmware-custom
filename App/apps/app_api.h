@@ -43,9 +43,14 @@
  *   1  v6.0.0 baseline: every service up to and including beam_draw
  *   2  ticks_ms, rand32, asset_read (+ app_header_t asset_size / asset_crc),
  *      idivmod, uidivmod (the resident division helpers), Labs system info,
- *      current and minimum-since-boot free stack/RAM margin */
+ *      current and minimum-since-boot free stack/RAM margin
+ *   3  append_i32 / append_u32 (resident decimal formatters), af_capture_open /
+ *      sample / close (RX audio on PA4), cycles_48mhz, draw_frequency; the
+ *      Labs system
+ *      information slots become part of the layout in every build, so the
+ *      level 3 services sit at one offset for every app */
 #define APP_ABI_MAJOR  1u
-#define APP_API_LEVEL  2u
+#define APP_API_LEVEL  3u
 
 /* Minimum API level of an app that ships read-only assets (pack_app.py). */
 #define APP_API_ASSETS 2u
@@ -263,8 +268,10 @@ typedef struct app_api {
     uint64_t (*idivmod)(int32_t n, int32_t d);
     uint64_t (*uidivmod)(uint32_t n, uint32_t d);
 
-#ifdef ENABLE_FEAT_F4HWN_OVERLAY_INFO
-    /* ---- API level 2: zero-code Labs system information ---- */
+    /* ---- API level 2: zero-code Labs system information ----
+     * Always part of the layout, whatever the build defines: every later field
+     * keeps one offset for every app. NULL when the resident firmware is built
+     * without ENABLE_FEAT_F4HWN_OVERLAY_INFO. */
     const char *sys_edition;
     const char *sys_version;
     const char *sys_build_date;
@@ -280,13 +287,49 @@ typedef struct app_api {
     /* ---- API level 2: stack watermark diagnostics ---- */
     uint32_t (*sys_stack_free_now)(void);
     uint32_t (*sys_stack_free_min)(void);
-#endif
+
+    /* ---- API level 3: number formatting ---- */
+    /* Signed decimal of v at dst, no leading zeros, '-' when negative, over the
+     * whole int32 range. Not NUL-terminated: returns the end, so calls chain
+     * as o = append_i32(o, v). Writes at most 11 characters. */
+    char *(*append_i32)(char *dst, int32_t v);
+
+    /* ---- API level 3: RX audio capture on PA4 ----
+     * The RX audio reaches PA4 (the voice DAC pin), AC-coupled: open snapshots
+     * GPIOA_MODER, RCC_APBENR1, DAC_CR, DAC_DHR12R1, ADC_SQR3 and ADC_SMPR3,
+     * holds PA4 at mid-scale with the MCU DAC (channel 1, output buffer off)
+     * and selects ADC channel 4 with the battery channel's sample time. While
+     * the capture is open, battery_sample() switches the ADC to the battery
+     * and back by itself. close restores all six registers; the loader also
+     * closes a capture the app left open. open and close may be repeated. */
+    void     (*af_capture_open)(void);
+    uint16_t (*af_capture_sample)(void);   /* one bounded 12-bit conversion  */
+    void     (*af_capture_close)(void);
+
+    /* Free-running count of 48 MHz core cycles: the 10 ms tick and the SysTick
+     * phase, read race-free. Wraps every ~89 s: compare with a signed
+     * difference, (int32_t)(api->cycles_48mhz() - next) < 0. */
+    uint32_t (*cycles_48mhz)(void);
+
+    /* ---- API level 3: the frequency as the main screen draws it ----
+     * f in 10 Hz units, from column x. Below 1 GHz: the big digits up to the
+     * kHz ("144.800") on lines line and line + 1, the last two digits in the
+     * small font on line + 1 right after them (big digits 13 px, the point
+     * 3 px: 95 px in all). From 1 GHz: the whole string in the normal font on
+     * line (80 px). Nothing clips, so x is held at 33 at most. */
+    void (*draw_frequency)(uint32_t f_10hz, uint8_t x, uint8_t line);
+
+    /* Unsigned decimal of u at dst, no leading zeros, over the whole uint32
+     * range. Not NUL-terminated: returns the end. Writes at most 10 chars. */
+    char *(*append_u32)(char *dst, uint32_t u);
 } app_api_t;
 
-#ifdef ENABLE_FEAT_F4HWN_OVERLAY_INFO
-_Static_assert(sizeof(app_api_t) == 328u,
-               "Labs system information must add exactly 52 API bytes");
-#endif
+/* The v2 table, frozen: level 3 services start right after it. */
+_Static_assert(__builtin_offsetof(app_api_t, append_i32) == 328u,
+               "the level 2 prefix must stay 328 bytes");
+/* The level 3 table, frozen: a new service goes after it, with a new level. */
+_Static_assert(sizeof(app_api_t) == 356u,
+               "the level 3 API table must stay 356 bytes");
 
 /* BK4819 AF modes for set_af (mirror driver/bk4819.h values). */
 enum { APP_AF_MUTE = 0, APP_AF_FM = 1, APP_AF_AM = 7 };

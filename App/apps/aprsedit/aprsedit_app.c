@@ -71,15 +71,12 @@ void *memset(void *dst, int value, size_t n)
     return dst;
 }
 
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
 static char *put_u8(char *out, uint8_t value)
 {
-    if (value >= 10u) {
-        *out = '0';
-        while (value >= 10u) { (*out)++; value -= 10u; }
-        out++;
-    }
-    *out++ = (char)('0' + value);
-    return out;
+    return g.A->append_i32(out, value);
 }
 
 /* "3/7" */

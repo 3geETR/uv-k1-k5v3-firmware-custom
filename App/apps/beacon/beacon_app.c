@@ -92,19 +92,10 @@ static char *T(char *buf,uint16_t off){ A->asset_read(off,buf,TEXT_MAX); return 
 /* ---- tiny formatting ---- */
 static uint8_t slen(const char *s){ uint8_t n=0; while(s[n])n++; return n; }
 static char *put(char *o,const char *s){ while(*s)*o++=*s++; return o; }
-/* Decimal digits of v, no leading zeros, by subtracting the powers of ten. */
-static char *putu(char *o,uint32_t v){
-    uint32_t place[PLACE_LEN/4u];
-    A->asset_read(PLACE,place,sizeof(place));
-    bool lead=true;
-    for(uint8_t i=0;i<PLACE_LEN/4u;i++){
-        uint8_t d=0;
-        while(v>=place[i]){ v-=place[i]; d++; }
-        if(d||i==PLACE_LEN/4u-1u) lead=false;
-        if(!lead) *o++=(char)('0'+d);
-    }
-    return o;
-}
+/* The resident formatter (API level 3). One local stub keeps every call a
+ * plain bl: the service lies past the ldr immediate range of the table. */
+__attribute__((noinline))
+static char *putu(char *o,uint32_t v){ return A->append_u32(o,v); }
 static void put2(char **o,uint16_t v){ if(v<10)*(*o)++='0'; *o=putu(*o,v); }
 static void cpy(uint8_t *d,const uint8_t *s,uint8_t n){ while(n--)*d++=*s++; }
 static const char *findsp(const char *s){ while(*s){ if(*s==' ')return s; s++; } return NULL; }

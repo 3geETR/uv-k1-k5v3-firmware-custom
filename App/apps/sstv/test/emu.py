@@ -4,7 +4,7 @@ stubbed app_api_t and an emulated SysTick and ADC, and check it against
 model.py: the TX tone sequence (REG_71 writes) and the received picture, pixel
 for pixel, for a few channel cases.
 
-Time T (48 MHz cycles) advances on every SysTick read (K cycles) and on the
+Time T (48 MHz cycles) advances on every cycle-clock read (K cycles) and on the
 stubbed services that cost time on the radio (key scan, blits, delays), so the
 key/screen slots skip samples as on the radio.
 
@@ -37,8 +37,10 @@ fm_commit nav_dir beam_prepare beam_leave beam_get beam_save beam_send beam_rx
 beam_rx_poll beam_draw ticks_ms rand32 asset_read idivmod uidivmod sys_edition
 sys_version sys_build_date sys_build_time sys_build_commit sys_flash_end sys_ram_end
 sys_battery_voltage sys_battery_type sys_battery_percent sys_storage_read
-sys_stack_free_now sys_stack_free_min""".split()
-assert 4 + 4 * len(API_NAMES) == 328
+sys_stack_free_now sys_stack_free_min append_i32 af_capture_open af_capture_sample
+af_capture_close cycles_48mhz draw_frequency append_u32""".split()
+API_SIZE = 4 + 4 * len(API_NAMES)
+assert API_SIZE == 356
 
 RAM, RAM_SZ = 0x20000000, 0x40000
 API = 0x20030000
@@ -70,7 +72,7 @@ class Emu:
                 if seg["p_type"] == "PT_LOAD" and seg["p_filesz"]:
                     u.mem_write(seg["p_paddr"], seg.data())
             self.sym = {s.name: s["st_value"] for s in elf.get_section_by_name(".symtab").iter_symbols()}
-        tab = bytearray(struct.pack("<BBH", 1, 2, 328))
+        tab = bytearray(struct.pack("<BBH", 1, 3, API_SIZE))
         self.stubs = {}
         for i, name in enumerate(API_NAMES):
             if name == "fb":
@@ -133,6 +135,19 @@ class Emu:
             u.mem_write(FB, bytes(896))
         elif name in ("status_clear",):
             u.mem_write(SL, bytes(128))
+        elif name == "cycles_48mhz":          # the resident cycle clock (level 3)
+            self.T += K                       # the app's busy-wait loops advance time
+            self.ret(self.T)
+        elif name == "af_capture_sample":     # the resident PA4 capture (level 3)
+            i = self.T // 5000
+            self.ret(self.adc[i] if i < len(self.adc) else 2048)
+        elif name in ("append_i32", "append_u32"):
+            v = self.r(1)
+            if name == "append_i32":
+                v = struct.unpack("<i", struct.pack("<I", v))[0]
+            t = str(v).encode()
+            u.mem_write(self.r(0), t)
+            self.ret(self.r(0) + len(t))
         elif name == "ticks_ms":              # the 10 ms SysTick interrupt count
             self.ret(self.T // 480000 * 10)
         elif name == "rx_freq":
@@ -163,7 +178,8 @@ class Emu:
         elif name in ("print_bold", "print_normal", "print_tiny", "print_inverse",
                       "display_freq", "draw_battery", "battery_sample", "backlight_on",
                       "backlight_update", "set_af", "audio_path", "tx_set_params",
-                      "tx_mute", "tx_end"):
+                      "tx_mute", "tx_end", "af_capture_open", "af_capture_close",
+                      "draw_frequency"):
             pass
         else:
             raise RuntimeError("unexpected API call " + name)
