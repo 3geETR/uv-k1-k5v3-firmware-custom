@@ -59,6 +59,7 @@ void *memcpy(void *d, const void *s, size_t n)
 #define KEY_IDLE_EVERY 4800u
 #define KEY_ARMED_EVERY 960u
 #define ARMED_REFRESH_SLOTS 5u
+#define LED_STEP (FS / 10u)
 #define CFG_MAGIC 0x10u
 #define SPK_X 59u
 #define BK_REG_13 0x13
@@ -76,7 +77,8 @@ static struct {
     int8_t offSteps;
     bool running, fArm;
     int16_t rssi;
-    uint16_t nOk;
+    uint16_t nOk, ledCnt;
+    uint8_t led;
 } g;
 
 static char *put(char *o, const char *s){ while (*s) *o++ = *s++; return o; }
@@ -266,11 +268,15 @@ static void listen(const saved_hw_t *saved, const char *ui)
             if (decm10_parse(&m10, &info)) {
                 g.info = info;
                 g.nOk++;
+                g.led = 3u; g.ledCnt = 0; g.A->led(true);
                 wantUi = true;
             }
             decm10_rearm(&m10);
         }
         if (decm10_busy(&m10)) continue;
+        if (g.led && ++g.ledCnt >= LED_STEP) {
+            g.ledCnt = 0; g.led--; g.A->led(g.led & 1u);
+        }
         uint16_t keyEvery = g.fArm ? KEY_ARMED_EVERY : KEY_IDLE_EVERY;
         if (!wantUi && ++cnt < keyEvery) continue;
         cnt = 0;
@@ -301,7 +307,7 @@ void app_main(const app_api_t *api)
     saved_hw_t saved;
     uint8_t cfg[4];
     char ui[UI_SIZE] __attribute__((aligned(4)));
-    Gdiv = api; g.A = api; g.prevKey = APP_KEY_INVALID;
+    Gdiv = api; g.A = api; g.prevKey = APP_KEY_INVALID; api->led(false);
     api->asset_read(0, ui, UI_SIZE);
 
     saved.sqr3 = ADC_SQR3; saved.smpr3 = ADC_SMPR3; saved.moder = GPIOA_MODER;
@@ -333,6 +339,7 @@ void app_main(const app_api_t *api)
     biasOff(&saved);
     api->set_af(APP_AF_MUTE);
     api->audio_path(false);
+    api->led(false);
     cfg[0] = CFG_MAGIC; cfg[1] = g.cfg.spk; cfg[2] = 0; cfg[3] = g.cfg.att;
     api->cfg_save(cfg, 4);
 }

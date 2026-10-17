@@ -25,6 +25,8 @@ Status:
    and frames fail, raise ATT further with key `3`. Avoid
    `BYP+` (maximum gain) on a strong signal.
 
+Each valid received frame triggers two short flashes of the green LED.
+
 | Screen | Content |
 |---|---|
 | Status bar | `Sonde M20` title; speaker icon while the speaker is on, temporarily replaced by `F` when the reverse modifier is armed |

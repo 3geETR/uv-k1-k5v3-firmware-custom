@@ -7,8 +7,9 @@ the serial number, GPS position, and altitude.
 ## Status
 
 Version 0.1 implements the standard M10 `0x9F` telemetry frame. The parser and
-soft-input path have a synthetic host test, but live reception on a UV-K1 or
-UV-K5 V3 still needs validation with a real M10 signal or recording.
+soft-input path have a synthetic host test. Live reception has also been
+validated in the field with an operational M10 radiosonde transmitted from
+Trappes, France.
 
 Not implemented yet:
 
@@ -55,6 +56,8 @@ samples per chip. The decoder DPLL tracks this small difference.
 
 Frames with an invalid GPS fix still count as valid received frames and show
 their serial number, but no position is displayed.
+
+Each valid received frame triggers two short flashes of the green LED.
 
 ## Build
 
