@@ -71,7 +71,7 @@ static char *putPos(char *o, int32_t s, char pos, char neg)
 {
     uint32_t a = (uint32_t)(s < 0 ? -s : s);
     o = puti(o, subu(&a, 3600u)); *o++ = '.';
-    for (uint8_t k = 0; k < 5u; k++) { a *= 10u; *o++ = (char)('0' + subu(&a, 3600u)); }
+    for (uint8_t k = 0; k < 4u; k++) { a *= 10u; *o++ = (char)('0' + subu(&a, 3600u)); }
     *o++ = s < 0 ? neg : pos;
     return o;
 }
@@ -85,13 +85,22 @@ static char *putFreq(char *o, uint32_t f)
     *o++ = (char)('0' + subu(&f, 100u));
     return o;
 }
-/* Signed tenths with a forced sign: +5.2, -0.4. */
-static char *putDm(char *o, int32_t v)
+/* Tenths: 12.3, -0.4; plus forces the sign of a positive value (+5.2). */
+static char *put1(char *o, int32_t v, bool plus)
 {
     uint32_t u = (uint32_t)(v < 0 ? -v : v);
-    *o++ = v < 0 ? '-' : '+';
+    if (v < 0) *o++ = '-';
+    else if (plus) *o++ = '+';
     o = puti(o, (int32_t)(u / 10u)); *o++ = '.'; *o++ = (char)('0' + u % 10u);
     return o;
+}
+/* Vertical speed: +5.2, -35.1; whole m/s from 100 m/s on (-105), so the ALT
+ * row stays within its 18 columns at any altitude. */
+static char *putVs(char *o, int32_t v)
+{
+    if (v >= 0) *o++ = '+';
+    if (v > -1000 && v < 1000) return put1(o, v, false);
+    return puti(o, (v + (v < 0 ? -5 : 5)) / 10);
 }
 static void tiny(char *buf, uint8_t x, uint8_t y, char *end)
 { *end = '\0'; g.A->print_tiny(buf, x, y, false, true); }
@@ -151,21 +160,25 @@ static void draw(const char *s)
     g.line = 1;
 
     if (g.nOk) {
+        /* The position on one row: 4 decimals (11 m) keep "89.9999S 179.9999W"
+         * within the 18 columns, so the four body rows always fit. */
         if (in->flags & SONDE_HAS_POS) {
-            char *latEnd = putPos(str, in->latS, 'N', 'S');
-            o = latEnd; *o++ = ' ';
+            o = putPos(str, in->latS, 'N', 'S'); *o++ = ' ';
             o = putPos(o, in->lonS, 'E', 'W');
-            if ((unsigned)(o - str) > 18u) {
-                emit(str, latEnd);
-                o = putPos(str, in->lonS, 'E', 'W');
-            }
         } else o = put(str, s + T_NOPOS);
         emit(str, o);
+        o = str;
         if (in->flags & SONDE_HAS_ALT) {
             o = put(str, s + T_ALT); o = puti(o, in->alt_m); o = put(o, s + T_M);
+            o = put(o, s + T_VS); o = putVs(o, in->vs_dm);
             emit(str, o);
-            o = put(str, s + T_VS); o = putDm(o, in->vs_dm);
-            o = put(o, s + T_SAT); o = puti(o, in->sats);
+            o = put(str, s + T_SAT); o = puti(o, in->sats); *o++ = ' ';
+        }
+        o = put(o, s + T_BAT); o = put1(o, in->batt_dv, false); o = put(o, s + T_V);
+        emit(str, o);
+        if (in->flags & SONDE_HAS_POS) {
+            o = put(str, s + T_HS); o = puti(o, (in->hs_dm + 5) / 10);
+            o = put(o, s + T_HDG); o = puti(o, in->hdg);
             emit(str, o);
         }
         g.A->print_bold(in->id, 0, 0, 0);

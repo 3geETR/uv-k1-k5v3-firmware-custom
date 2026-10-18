@@ -2,17 +2,18 @@
 
 Receive-only overlay application for standard Vaisala RS41 radiosondes. It
 samples the BK4829 AF output on PA4, validates RS41 STATUS and GPS sub-blocks,
-and displays the serial number, GPS position, altitude, vertical speed, and
-the number of GPS satellites.
+and displays the serial number, GPS position, altitude, vertical speed, the
+number of GPS satellites, the horizontal speed and heading, and the sonde's
+battery voltage.
 
 ## Status
 
-Version 0.2 implements the common 320-byte RS41 frame at 4800 bit/s. The
+Version 0.3 implements the common 320-byte RS41 frame at 4800 bit/s. The
 parser, CRC path, normal RF polarity, and inverted RF polarity have synthetic
 host tests, and `test/model_rx.py` runs the demodulator through a model of the
 radio's RAW audio path. Reception on a UV-K1 or UV-K5 V3 has been validated
-with the generated Flipper Zero files in both RF polarities. Reception of a
-real RS41 signal still needs field validation.
+with the generated Flipper Zero files in both RF polarities. Successful
+reception of real RS41 signals has also been reported from the field.
 
 To fit the 4 KiB overlay, this first version deliberately does not implement:
 
@@ -71,7 +72,14 @@ false sync.
 - eight-character sonde serial number;
 - GPS ECEF position converted to latitude, longitude, and altitude;
 - GPS ECEF velocity projected on the local vertical (`VS`, m/s, positive
-  while climbing) and the number of satellites used (`SAT`).
+  while climbing) and the number of satellites used (`SAT`);
+- the same velocity projected on the local east and north, in integers
+  without trigonometry: horizontal speed (`HS`, whole m/s) and heading
+  (`HDG`, degrees from north);
+- battery voltage, STATUS byte `0x45` in 0.1 V (as `rs41mod`).
+
+Screen body, four rows: the position (4 decimals, about 11 m, so it always
+fits one row), `ALT …m VS±…`, `SAT n BAT …V`, `HS …m/s HDG …`.
 
 ## Build
 
@@ -104,4 +112,4 @@ Use only a frequency permitted by the Flipper's configured region.
 
 ## Version
 
-Current: **v0.2**.
+Current: **v0.3**.

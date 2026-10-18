@@ -81,6 +81,7 @@ static void makeFrame(uint8_t *clear, uint8_t *wire)
     status[2] = 0x34;
     status[3] = 0x12;
     memcpy(status + 4, "S1234567", 8);
+    status[12] = 29;                   /* 0x45: battery 2.9 V */
     status[25] = 0;
     finishBlock(clear, 0x39);
 
@@ -127,7 +128,11 @@ static void checkParse(void)
     assert(info.lonS > 8100 && info.lonS < 8500);
     assert(info.alt_m > 1150 && info.alt_m < 1250);
     assert(info.vs_dm >= 51 && info.vs_dm <= 53);
+    /* 8 m/s east, 3 m/s south: 8.5 m/s towards 110.6 degrees */
+    assert(info.hs_dm >= 84 && info.hs_dm <= 86);
+    assert(info.hdg >= 109 && info.hdg <= 112);
     assert(info.sats == 8u);
+    assert(info.batt_dv == 29u);
 
     initDec(&d);
     wire[0x112 + 4] ^= 1u;

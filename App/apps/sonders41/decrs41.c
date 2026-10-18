@@ -245,9 +245,30 @@ static bool ecef(const uint8_t *p, sonde_info_t *out, const uint32_t *arc)
     /* ECEF velocity (cm/s) projected on the local vertical: x100.v is in
      * 100 m.cm/s, so dividing by the radius in 10 m gives dm/s. It fits an
      * int32 below 330 m/s. */
+    int32_t vx = le16(p + 12), vy = le16(p + 14), vz = le16(p + 16);
     {
-        int32_t dot = x100 * le16(p + 12) + y100 * le16(p + 14) + z100 * le16(p + 16);
+        int32_t dot = x100 * vx + y100 * vy + z100 * vz;
         out->vs_dm = (int16_t)(dot / (int32_t)(radiusM / 10u));
+    }
+    /* The same velocity on the local east and north, without trigonometry:
+     * east = (-y, x, 0) / h, north = (-z x, -z y, h^2) / (r h), positions in
+     * km so every product fits an int32 (h: distance to the polar axis). */
+    out->hs_dm = 0;
+    out->hdg = 0;
+    {
+        int32_t x1k = x100 / 10, y1k = y100 / 10, z1k = z100 / 10;
+        int32_t h1k = (int32_t)(horizontal / 10u);
+        if (h1k) {
+            int32_t ve = (x1k * vy - y1k * vx) / h1k;                       /* cm/s */
+            int32_t vr = (x1k * vx + y1k * vy) / h1k;                       /* away from the axis */
+            int32_t vn = (h1k * vz - z1k * vr) / (int32_t)(radiusM / 1000u);
+            int32_t a = atan2Arc(ve, vn, arc);                              /* from north, east > 0 */
+            /* int16 cm/s components: the sum of squares stays below 2^32 */
+            out->hs_dm = (uint16_t)((isqrt32((uint32_t)ve * (uint32_t)ve + (uint32_t)vn * (uint32_t)vn) + 5u) / 10u);
+            if (a < 0) a += 1296000;
+            a = (a + 1800) / 3600;
+            out->hdg = (uint16_t)(a >= 360 ? 0 : a);
+        }
     }
     out->sats = p[18];
     return true;
@@ -265,6 +286,7 @@ static bool frameOk(const decrs41_t *d, uint8_t *f, sonde_info_t *out)
         out->id[i] = (char)c;
     }
     out->id[8] = 0;
+    out->batt_dv = f[statusPos + 12u];     /* 0x45: battery, 0.1 V (rs41mod) */
     out->flags = SONDE_HAS_ID;
     if (blockOk(f, gpsPos, 0x7Bu, 21u) && ecef(f + gpsPos + 2u, out, d->arc))
         out->flags |= SONDE_HAS_POS | SONDE_HAS_ALT;

@@ -38,6 +38,10 @@ def test_frame():
     frame[0] = 0x64
     frame[1] = 0x9F
     frame[2] = 0x20
+    # 8 m/s east, 3 m/s south, 5.2 m/s up, in 1/200 m/s (m10mod)
+    put_be(frame, 0x04, 1600, 2)
+    put_be(frame, 0x06, -600 & 0xFFFF, 2)
+    put_be(frame, 0x08, 1040, 2)
     put_be(frame, 0x0E, round(48.8 * (1 << 32) / 360), 4)
     put_be(frame, 0x12, round(2.3 * (1 << 32) / 360), 4)
     put_be(frame, 0x16, 1200000, 4)
@@ -109,7 +113,8 @@ def test_cases():
     bad_crc[0x0E] ^= 1
     chips = frame_chips(valid)
     return {
-        "valid": (chips, "A05-B-11234, 48.80000N 2.30000E, ALT 1200m, T 20.0C"),
+        "valid": (chips, "A05-B-11234, 48.8000N 2.3000E, ALT 1200m VS+5.2, T 20.0C, "
+                           "HS 9m/s HDG 111"),
         "inverted": ([1 ^ chip for chip in chips], "same frame, inverted RF polarity"),
         "badcrc": (frame_chips(bad_crc), "rejected: FRAME must not increment"),
     }

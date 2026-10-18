@@ -215,6 +215,36 @@ static char *digits(char *o, uint32_t v, uint32_t div)
     return o;
 }
 
+static uint32_t isqrt32(uint32_t n)
+{
+    uint32_t root = 0, bit = 1u << 30;
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= root + bit) { n -= root + bit; root = (root >> 1) + bit; }
+        else root >>= 1;
+        bit >>= 2;
+    }
+    return root;
+}
+
+/* Compass bearing of the (east, north) vector, whole degrees 0..359: the
+ * octant folded, then atan(t) ~ 45 t + 15.6 t (1 - t) degrees for
+ * t = min / max in [0, 1] (within 0.3 degree before rounding). */
+static uint16_t bearing(int32_t e, int32_t n)
+{
+    uint32_t ae = (uint32_t)(e < 0 ? -e : e), an = (uint32_t)(n < 0 ? -n : n);
+    uint32_t mn = ae < an ? ae : an, mx = ae < an ? an : ae;
+    uint32_t t, a;
+    if (!mx) return 0;
+    t = (mn << 12) / mx;                                        /* Q12 */
+    a = (450u * t + ((156u * t * (4096u - t)) >> 12) + 2048u) >> 12;  /* 0.1 deg */
+    if (ae > an) a = 900u - a;           /* from north, within the quadrant */
+    if (n < 0) a = 1800u - a;
+    if (e < 0) a = 3600u - a;
+    a = (a + 5u) / 10u;
+    return (uint16_t)(a >= 360u ? 0u : a);
+}
+
 bool decm10_parse(decm10_t *d, sonde_info_t *out)
 {
     const uint8_t *f = d->frm;
@@ -253,5 +283,15 @@ bool decm10_parse(decm10_t *d, sonde_info_t *out)
     out->alt_m = alt / 1000;
     out->flags |= SONDE_HAS_ALT;
     if (out->latS || out->lonS) out->flags |= SONDE_HAS_POS;
+    /* GPS velocity east / north / up, int16 big-endian in 1/200 m/s
+     * (m10mod pos_GPSvE / vN / vU) */
+    {
+        int32_t ve = (int16_t)be(f + 0x04u, 2), vn = (int16_t)be(f + 0x06u, 2);
+        out->vs_dm = (int16_t)((int16_t)be(f + 0x08u, 2) / 20);
+        out->hs_dm = (uint16_t)((isqrt32((uint32_t)ve * (uint32_t)ve +
+                                         (uint32_t)vn * (uint32_t)vn) + 10u) / 20u);
+        out->hdg = bearing(ve, vn);
+        out->flags |= SONDE_HAS_VEL;
+    }
     return true;
 }

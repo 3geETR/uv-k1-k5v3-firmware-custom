@@ -2,12 +2,13 @@
 
 Receive-only overlay application for standard Meteomodem M10 radiosondes. It
 samples the BK4829 AF output on PA4, validates the M10 checksum, and displays
-the serial number, GPS position, altitude, and outside temperature.
+the serial number, GPS position, altitude, outside temperature, vertical
+speed, horizontal speed, and heading.
 
 ## Status
 
-Version 0.2 implements the standard M10 `0x9F` telemetry frame and outside
-temperature conversion. The parser and soft-input path have a synthetic host
+Version 0.3 implements the standard M10 `0x9F` telemetry frame, outside
+temperature conversion, and the GPS velocity. The parser and soft-input path have a synthetic host
 test. Live reception has also been validated in the field with an operational
 M10 radiosonde transmitted from Trappes, France.
 
@@ -54,7 +55,14 @@ samples per chip. The decoder DPLL tracks this small difference.
 - Trimble GPS packet `0x20` position and altitude;
 - standard five-byte M10 serial number.
 - Shibaura PB5-41E thermistor temperature, converted with a compact lookup
-  table and integer interpolation.
+  table and integer interpolation;
+- GPS velocity east / north / up at `0x04` / `0x06` / `0x08` (big-endian
+  int16, 1/200 m/s, as `m10mod`): vertical speed (`VS`), horizontal speed
+  (`HS`, whole m/s) and heading (`HDG`, degrees from north, a table-free
+  `atan` within 0.3 degree), with a valid GPS fix.
+
+Screen body, four rows: the position (4 decimals, about 11 m, so it always
+fits one row), `ALT …m VS±…`, `T …C`, `HS …m/s HDG …`.
 
 Frames with an invalid GPS fix still count as valid received frames and show
 their serial number, but no position is displayed.
@@ -92,4 +100,4 @@ Use only a frequency permitted by the Flipper's configured region.
 
 ## Version
 
-Current: **v0.2**.
+Current: **v0.3**.

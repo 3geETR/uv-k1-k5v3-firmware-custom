@@ -69,6 +69,7 @@ def test_frame():
     frame[status + 1] = 40
     frame[status + 2:status + 4] = (1234).to_bytes(2, "little")
     frame[status + 4:status + 12] = b"S1234567"
+    frame[status + 12] = 29                     # 0x45: battery 2.9 V
     finish_block(frame, status)
 
     gps = 0x112
@@ -133,7 +134,8 @@ def test_cases():
     bad_crc[0x39 + 4] ^= 1
     bits = wire_bits(valid)
     return {
-        "valid": (bits, "S1234567, 48.80000N 2.30000E, ALT about 1200m, VS +5.2m/s SAT 8"),
+        "valid": (bits, "S1234567, 48.8000N 2.3000E, ALT about 1200m VS+5.2, "
+                           "SAT 8 BAT 2.9V, HS 9m/s HDG 110 or 111"),
         "inverted": ([1 ^ bit for bit in bits], "same frame, inverted RF polarity"),
         "badcrc": (wire_bits(bad_crc), "rejected: FRAME must not increment"),
     }

@@ -13,7 +13,7 @@ Status:
 | Flipper Zero bench frames | **Generated** (`test/flipper/`), radio validation pending |
 | AF bypass (REG_47 AF=9) required for 9600-chip Manchester | **Done** — stock FM AF low-passes ~3–4 kHz and wipes 1-chip runs |
 | Mid-sample DPLL (2 ADC samples/chip @ 19.2 kHz) | **Done** — needed for real UV-K1 captures (~9620 chip/s) |
-| Radio app (`sondem20_app.c`) | **v1.0** decodes a live M20 on a UV-K1 (ID, lat/lon, alt, T, P) |
+| Radio app (`sondem20_app.c`) | **v1.0** decodes a live M20 on a UV-K1 (ID, lat/lon, alt, T, P); **v1.1** adds the GPS velocity (VS, HS, heading), radio validation pending |
 
 ## Using the app
 
@@ -31,7 +31,7 @@ Each valid received frame triggers two short flashes of the green LED.
 |---|---|
 | Status bar | `Sonde M20` title; speaker icon while the speaker is on, temporarily replaced by `F` when the reverse modifier is armed |
 | Fixed line 0 | Serial number in bold (`YMM-n-bnnnn`, same form as auto_rx / SondeHub) |
-| Body | Latitude / longitude; `ALT …m`; `T …C` and pressure in hPa when available |
+| Body | Latitude / longitude on one row (4 decimals, about 11 m); `ALT …m VS±…`; `T …C` and pressure in hPa when available; `HS …m/s HDG …` |
 | Dotted separator | Line at y=40 |
 | Fixed rows | RX frequency (and ±5 kHz offset), live RSSI; `FRAME n` and current ATT |
 
@@ -84,7 +84,10 @@ auto_rx `m20mod` softin:
    chips softin to `0x4520` / `0x4320` (body polarity probed via the MSB).
 4. **Bits**: Manchester softin `(s2>=s1)`, differential vs previous man bit.
 5. **Parse**: checkM10 CRC; SN; lat/lon ×1e6; altitude; thermistor ADC (table
-   lookup in the app for °C); optional pressure (DF9DQ layout, FW ≥ 7).
+   lookup in the app for °C); optional pressure (DF9DQ layout, FW ≥ 7);
+   GPS velocity east / north / up at `0x0B` / `0x0D` / `0x18` (big-endian
+   int16, cm/s, as `mXXmod`): vertical speed, horizontal speed and heading
+   (a table-free `atan` within 0.3 degree).
 
 ## Tests (`test/`)
 
@@ -160,4 +163,4 @@ test/run_tests.sh
 
 `APP_VER` in `build.sh` is bumped for every build that goes on a radio and is
 stored in the `.app` metadata. The status-bar title stays `Sonde M20`.
-Current: **v1.0**.
+Current: **v1.1**.

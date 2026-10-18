@@ -66,6 +66,10 @@ static void build_frame(uint8_t *f)
 {
     memset(f, 0, M10_FRAME_LEN);
     f[0] = 0x64; f[1] = 0x9F; f[2] = 0x20;
+    /* 8 m/s east, 3 m/s south, 5.2 m/s up, in 1/200 m/s big-endian */
+    f[0x04] = 0x06; f[0x05] = 0x40;   /*  1600 */
+    f[0x06] = 0xFD; f[0x07] = 0xA8;   /*  -600 */
+    f[0x08] = 0x04; f[0x09] = 0x10;   /*  1040 */
     put_be32(f + 0x0E, 582206678); /* 48.8 degrees in 2^32/360 units */
     put_be32(f + 0x12, 27440069);  /* 2.3 degrees */
     put_be32(f + 0x16, 1200000);   /* 1200 m in millimetres */
@@ -92,7 +96,10 @@ static int fields_ok(const sonde_info_t *out)
            (out->flags & (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT)) ==
                (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT) &&
            out->tRaw == 0x0599u && out->alt_m == 1200 &&
-           lat_err <= 1 && lon_err <= 1;
+           lat_err <= 1 && lon_err <= 1 &&
+           /* 8.5 m/s towards 110.6 degrees, climbing 5.2 m/s */
+           (out->flags & SONDE_HAS_VEL) && out->vs_dm == 52 &&
+           out->hs_dm == 85 && out->hdg == 111;
 }
 
 int main(void)

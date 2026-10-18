@@ -7,8 +7,11 @@ typedef struct {
     char id[12];
     int32_t latS, lonS, alt_m;
     int16_t vs_dm;          /* vertical speed, dm/s (with SONDE_HAS_POS) */
+    uint16_t hs_dm;         /* horizontal speed, dm/s (with SONDE_HAS_POS) */
+    uint16_t hdg;           /* heading, degrees 0..359 from north (with SONDE_HAS_POS) */
     uint8_t flags;
     uint8_t sats;           /* GPS satellites used (with SONDE_HAS_POS) */
+    uint8_t batt_dv;        /* battery voltage, 0.1 V (STATUS, with SONDE_HAS_ID) */
 } sonde_info_t;
 
 enum {
