@@ -159,8 +159,9 @@ enum {
 /* Read + validate a slot header (no CRC of the code). */
 uint8_t APP_ValidateSlot(uint8_t slot, app_header_t *out_header);
 
-/* Validate, load into the overlay, verify the code CRC, and run the app.
- * Returns when the app exits; the internal flash is never touched. */
+/* Validate, load into the overlay, verify the code CRC, and run the app, then
+ * each app it hands off to.  Returns when the last one exits, with its result;
+ * the internal flash is never touched. */
 uint8_t APP_LaunchOverlay(uint8_t slot);
 
 /* An open RX audio capture (af_capture_open) holds the ADC on PA4: Yield puts
@@ -168,6 +169,14 @@ uint8_t APP_LaunchOverlay(uint8_t slot);
  * takes PA4 back. Used by BOARD_ADC_GetBatteryInfo(). */
 bool    APP_AfCaptureYieldAdc(void);
 void    APP_AfCaptureResumeAdc(void);
+
+/* The slot of the last app APP_LaunchOverlay ran or tried to launch: the app
+ * that ended a hand-off chain, or the target that failed.  Its header names
+ * the app in an error and holds the APP_FLAG_EXIT_TO_MAIN that applies. */
+uint8_t APP_LastLaunchedSlot(void);
+
+/* Block until no key and no PTT has been down for 100 ms. */
+void    APP_WaitKeyRelease(void);
 
 /* Launch the first installed app advertising this shortcut bit. */
 uint8_t APP_LaunchOverlayShortcut(uint8_t shortcut);

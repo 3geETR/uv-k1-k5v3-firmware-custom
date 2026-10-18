@@ -11,10 +11,15 @@
  *   1     hand off to an app that is not installed: must be refused.
  *   2     hand off to the peer, then cancel (a missing name) and exit: the
  *         Apps menu must come back.
+ *   3     hand off to the peer with no payload, on the press, key still down:
+ *         the peer must show "EMPTY OK" and stay.  Neither app waits for the
+ *         key that launched it, so without the loader's release wait the peer
+ *         would see 3 held and bounce straight back.
  *   EXIT  leave normally (Apps menu).
  *
- * Every launch also checks that a second handoff_read() returns 0 (read once).
- * Launched from the menu, an app shows "RX none".
+ * Names are plain C strings, shorter than APP_NAME_LEN.  Every launch also
+ * checks that a second handoff_read() returns -1 (read once).  Launched from
+ * the menu, an app shows "RX none".
  */
 #include <stddef.h>
 #include "../app_api.h"
@@ -29,13 +34,13 @@ void *memcpy(void *d, const void *s, size_t n)
 }
 
 #ifdef HANDOFF_B
-static const char SELF[APP_NAME_LEN] = "Handoff B";
-static const char PEER[APP_NAME_LEN] = "Handoff A";
+#define SELF "Handoff B"
+#define PEER "Handoff A"
 #else
-static const char SELF[APP_NAME_LEN] = "Handoff A";
-static const char PEER[APP_NAME_LEN] = "Handoff B";
+#define SELF "Handoff A"
+#define PEER "Handoff B"
 #endif
-static const char MISSING[APP_NAME_LEN] = "No Such App";
+#define MISSING "No Such App"
 
 enum { MSG_PING = 'P', MSG_PONG = 'R' };
 #define PING_LEN 40u   /* longer than APP_HANDOFF_MAX on purpose: must arrive clamped */
@@ -46,10 +51,9 @@ static uint8_t pattern(uint8_t i) { return (uint8_t)(i * 7u + 0x5Au); }
 
 static bool same_name(const char *a, const char *b)
 {
-    for (uint8_t i = 0; i < APP_NAME_LEN; i++)
-        if (a[i] != b[i])
-            return false;
-    return true;
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
 }
 
 /* "<prefix><n>" with n in decimal, into a 20-byte line. */
@@ -79,10 +83,8 @@ void app_main(const app_api_t *api)
     char from[APP_NAME_LEN + 1];
     char text[24];
 
-    const uint8_t n = A->handoff_read(msg, sizeof(msg), from);
-    from[APP_NAME_LEN] = '\0';
-    char again[APP_NAME_LEN + 1];
-    const bool once = A->handoff_read(msg, sizeof(msg), again) == 0;
+    const int16_t n = A->handoff_read(msg, sizeof(msg), from);
+    const bool once = A->handoff_read(NULL, 0, NULL) < 0;
 
     uint8_t count = 0;
 #ifndef HANDOFF_B
@@ -95,33 +97,36 @@ void app_main(const app_api_t *api)
     A->print_tiny("HANDOFF TEST V" APP_VERSION, 2, 1, true, true);
     A->print_bold(SELF, 0, 127, 0);
 
-    if (n == 0) {
+    if (n < 0) {
         show(1, "RX none");
+    } else if (n == 0) {
+        show(1, "RX 0");
+        show(2, from);
+        show(3, same_name(from, PEER) ? "EMPTY OK" : "EMPTY BAD");
     } else {
-        line_num(text, "RX ", n);
+        line_num(text, "RX ", (uint8_t)n);
         show(1, text);
         show(2, from);
         bool ok = same_name(from, PEER);
 #ifdef HANDOFF_B
-        ok = ok && n == APP_HANDOFF_MAX && msg[0] == MSG_PING;
+        ok = ok && n == (int16_t)APP_HANDOFF_MAX && msg[0] == MSG_PING;
         for (uint8_t i = 2; i < n; i++)
             ok = ok && msg[i] == pattern(i);
         count = msg[1];
         line_num(text, ok ? "PING OK #" : "PING BAD #", count);
 #else
-        ok = ok && n == 2u && msg[0] == MSG_PONG && msg[1] == count;
+        ok = ok && n == 2 && msg[0] == MSG_PONG && msg[1] == count;
         line_num(text, ok ? "PONG+CFG OK #" : "PONG BAD #", msg[1]);
 #endif
         show(3, text);
     }
     show(4, once ? "READ ONCE OK" : "READ TWICE BAD");
-    A->print_tiny("MENU PEER  1 MISSING  2 CANCEL", 2, 50, false, true);
+    A->print_tiny("MENU PEER 1 MISS 2 CANC 3 EMPTY", 2, 50, false, true);
     A->blit_status();
     A->blit_full();
 
-    /* Wait for the key that launched us to be released. */
-    while (A->get_key() != APP_KEY_INVALID)
-        A->delay_ms(10);
+    /* No wait here for the key that launched us: the menu and the loader
+     * release it first, and key 3 checks the loader's. */
 
     for (;;) {
         A->delay_ms(20);
@@ -129,6 +134,13 @@ void app_main(const app_api_t *api)
         const uint8_t key = A->get_key();
         if (key == APP_KEY_SAVER || key == APP_KEY_WAKE || key == APP_KEY_INVALID)
             continue;
+        if (key == APP_KEY_3) {   /* on the press, key still down */
+            if (A->handoff(PEER, NULL, 0))
+                return;
+            show(5, "PEER MISSING");
+            A->blit_full();
+            continue;
+        }
         while (A->get_key() != APP_KEY_INVALID)   /* act on release */
             A->delay_ms(10);
 
