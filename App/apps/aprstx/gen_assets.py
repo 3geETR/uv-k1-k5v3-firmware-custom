@@ -44,6 +44,7 @@ UI = [
     ("T_TX",     TX_CAPS),
     ("T_DENIED", "TX denied"),
     ("T_NOCALL", "No callsign"),
+    ("T_NOEDIT", "No APRS Edit"),
     ("T_LVL",    "lvl "),
     ("T_TW",     "  tw "),
     ("T_SENT",   "  sent "),

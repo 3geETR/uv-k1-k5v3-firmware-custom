@@ -7,7 +7,7 @@ which is also the test receiver.
 | Step | State |
 |---|---|
 | Frame and bit stream model (`test/tx_model.py`) | **Done**: identical to the RX app's AX.25 reference, decoded by the RX model |
-| Radio app (`aprstx_app.c`) | **v0.1 works on the radio** (2026-09-30); v0.2-v0.7 add and refine the original editor and display; v0.8 introduces APRS Edit; v0.9 moves the complete beacon-profile editor into APRS Edit; v1.0-v1.2 extend comments to five editor lines and 89 characters; v1.3 adds the editable source callsign; v1.4 changes the default comment; v1.5 adds the beacon timer (key 3), **works on the radio** (2026-10-13) |
+| Radio app (`aprstx_app.c`) | **v0.1 works on the radio** (2026-09-30); v0.2-v0.7 add and refine the original editor and display; v0.8 introduces APRS Edit; v0.9 moves the complete beacon-profile editor into APRS Edit; v1.0-v1.2 extend comments to five editor lines and 89 characters; v1.3 adds the editable source callsign; v1.4 changes the default comment; v1.5 adds the beacon timer (key 3), **works on the radio** (2026-10-13); v1.7 adds the round trip to APRS Edit |
 | On-air test: APRS RX on a second radio, FT3D | **Done** (2026-09-30, v0.1: frames received by a UV-K1 running APRS RX and by the FT3D, first try, default level 66 and twist 0) |
 
 ## Station settings (`gen_assets.py`, then rebuild)
@@ -30,7 +30,7 @@ APRS Edit changes the callsign, SSID, position, path, symbol and comment without
 duplicating the transmitter. APRS TX 1.3 and later store them in one versioned 117-byte
 profile asset. Reinstalling APRS TX restores the bundled defaults.
 
-APRS TX 1.4 and later require Fusion firmware v6.2.0 or later, the first one whose
+APRS TX 1.4 and later require Labs firmware v6.2.0 or later, the first one whose
 configuration proxy lets APRS Edit change this profile: earlier firmware
 refuses to launch it (`NOT SUPPORTED`) rather than transmit fixed defaults.
 
@@ -47,6 +47,7 @@ Yaesu bitmap set is stored in the app assets; the editor keeps the full width.
 | 1 / F then 1 | Tone level (deviation) up / down: REG_70 gain 10-127, step 4, default 66 (the firmware's tone gain) |
 | 2 / F then 2 | Twist `tw` up / down, -4..+8: 2200 Hz gain = level × (8 + tw) / 8 (-6..+6 dB) |
 | 3 / F then 3 | Beacon interval: off, 1, 5, 15, 30, 60 min (saved) / beacon off. While an interval is set, the time left before the next frame counts down in a status-bar capsule (`4:32`, x = 40, where `TRANSMIT` shows while on the air) and the frame is sent at zero. The countdown restarts from the whole interval at launch, at each change of interval and at each send, PTT / MENU included: nothing goes on the air right at launch |
+| 0 | Open APRS Edit. Its top-level `EXIT` saves the profile and returns directly to APRS TX; field-level `EXIT` still cancels only that field. If APRS Edit is absent, TX stays open and shows `No APRS Edit` |
 | F | Arm the next key's down direction (1, 2) or the beacon off (3), as FoxHunt's F; icon in the status bar while armed |
 | * | Scroll view / compact view (saved): compact shows the source in bold, then the path, the position `48 50.90N 002 16.25E`, the symbol and the comment in the tiny 3x5 font, 32 characters a row, without scroll |
 | EXIT | Quit (level, twist, view and beacon interval are saved); the beacon only runs while the app is open |

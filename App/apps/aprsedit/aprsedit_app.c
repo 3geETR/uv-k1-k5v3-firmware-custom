@@ -54,7 +54,7 @@ static struct {
     uint8_t mode, screen, item, preset, active_preset;
     uint8_t pending_key, pending_pos, cycle, held_key;
     uint16_t pending_ticks, held_ticks;
-    bool pending, long_fired, dirty, changed, running, missing, bad;
+    bool pending, long_fired, dirty, changed, running, missing, bad, return_to_tx;
 } g;
 
 void *memcpy(void *dst, const void *src, size_t n)
@@ -403,6 +403,7 @@ static void index_key(uint8_t key)
     if (key == APP_KEY_MENU) open_editor();
     else if (key == APP_KEY_EXIT) {
         if (g.changed) g.A->cfg_save(g.profile, APRS_PROFILE_LEN);
+        if (g.return_to_tx) g.A->handoff(APRS_TX_APP_NAME, NULL, 0u);
         g.running = false;
     } else g.item = step(g.item, g.A->nav_dir(key), MENU_COUNT);
 }
@@ -468,7 +469,7 @@ static void preset_key(uint8_t key)
 
 static void short_key(uint8_t key)
 {
-    if (g.missing) { if (key == APP_KEY_EXIT) g.running = false; return; }
+    if (g.missing) { if (key == APP_KEY_EXIT) index_key(key); return; }
     if (g.screen == SCREEN_INDEX) index_key(key);
     else if (g.screen == SCREEN_PRESET) preset_key(key);
     else edit_key(key);
@@ -480,10 +481,13 @@ void app_main(const app_api_t *api)
 {
     uint8_t block[APRS_PROFILE_LEN], backup[APRS_PROFILE_LEN];
     char custom[APRS_COMMENT_MAX];
+    uint8_t request = 0u;
     uint32_t magic;
     g.A = api; g.profile = block; g.backup = backup; g.custom = custom;
     g.held_key = APP_KEY_INVALID; g.pending_key = APP_KEY_INVALID;
     g.running = true; g.dirty = true;
+    const int16_t handoff_len = api->handoff_read(&request, sizeof request, NULL);
+    g.return_to_tx = handoff_len >= 1 && request == APRS_HANDOFF_EDIT_RETURN;
     api->cfg_load(block, sizeof(block));
     memcpy(&magic, block, sizeof(magic));
     g.missing = magic != APRS_PROFILE_MAGIC ||

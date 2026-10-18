@@ -37,9 +37,10 @@
  *   1 px per loop · 1 / F then 1 tone level up / down (deviation, REG_70 gain
  *   10-127) · 2 / F then 2 twist up / down: 2200 Hz gain = level x (8 + tw) / 8,
  *   tw -4..+8 (-6..+6 dB), for a receiver's de-emphasis · 3 beacon interval
- *   (off, 1, 5, 15, 30, 60 min), F then 3 beacon off · * scroll view / compact
- *   view · EXIT quit. F as FoxHunt's: the next key goes down, an icon in the
- *   status bar while armed. Level, twist, view and interval are saved on exit.
+ *   (off, 1, 5, 15, 30, 60 min), F then 3 beacon off · 0 open APRS Edit, whose
+ *   top-level EXIT saves and returns here · * scroll view / compact view · EXIT
+ *   quit. F as FoxHunt's: the next key goes down, an icon in the status bar
+ *   while armed. Level, twist, view and interval are saved on exit.
  *
  * Beacon: while an interval is set, the time left before the next frame counts
  * down in a status-bar capsule ("4:32") and the frame is sent when it reaches
@@ -101,7 +102,7 @@
 #define REFRESH_LOOPS 125u /* a redraw every 5 s without a key (battery)       */
 #define BEACON_LOOPS 20u   /* every 0.8 s while the beacon counts down: no second skipped */
 
-enum { ST_IDLE = 0, ST_TX, ST_DENIED, ST_NOCALL };
+enum { ST_IDLE = 0, ST_TX, ST_DENIED, ST_NOCALL, ST_NOEDIT };
 
 /* The app state in one struct: a function loads one base address instead of one
  * literal-pool word per global. Bytes, then the halfword, then words, so every
@@ -403,8 +404,9 @@ static void draw(void){
     drawSymbol(SYM_X,g.sym);
 
         /* bottom line: "lvl 66  tw +0  sent 3", or why nothing was sent */
-    if(g.status==ST_DENIED||g.status==ST_NOCALL)
-        o=put(str,g.status==ST_DENIED?s+T_DENIED:s+T_NOCALL);
+    if(g.status==ST_DENIED||g.status==ST_NOCALL||g.status==ST_NOEDIT)
+        o=put(str,g.status==ST_DENIED?s+T_DENIED:
+                  g.status==ST_NOCALL?s+T_NOCALL:s+T_NOEDIT);
     else {
         o=put(str,s+T_LVL); o=puti(o,g.lvl);
         o=put(o,s+T_TW); if(g.tw>0) *o++='+'; o=puti(o,g.tw);
@@ -465,6 +467,11 @@ static void handleKeys(void){
     g.fArm=false;
     if(key==APP_KEY_EXIT) g.running=false;
     else if(key==APP_KEY_MENU||key==APP_KEY_PTT) send();
+    else if(key==APP_KEY_0){
+        const uint8_t request=APRS_HANDOFF_EDIT_RETURN;
+        if(A->handoff(APRS_EDIT_APP_NAME,&request,sizeof request)) g.running=false;
+        else g.status=ST_NOEDIT;
+    }
     else if(key==APP_KEY_1){
         if(back){ if(g.lvl>=LVL_MIN+LVL_STEP) g.lvl=(uint8_t)(g.lvl-LVL_STEP); }
         else if(g.lvl<=LVL_MAX-LVL_STEP) g.lvl=(uint8_t)(g.lvl+LVL_STEP);

@@ -20,6 +20,12 @@
 #define APRS_PROFILE_CALL_LEN     110u
 #define APRS_PROFILE_CALL         111u
 
+/* APRS overlay hand-off protocol.  TX asks the editor to return after saving;
+ * the profile itself stays in the configuration proxy, not in the mailbox. */
+#define APRS_TX_APP_NAME          "APRS TX"
+#define APRS_EDIT_APP_NAME        "APRS Edit"
+#define APRS_HANDOFF_EDIT_RETURN  1u
+
 _Static_assert(APRS_PROFILE_POS + APRS_POS_DIGITS == APRS_PROFILE_COMMENT &&
                APRS_PROFILE_COMMENT + APRS_COMMENT_MAX == APRS_PROFILE_CALL_LEN &&
                APRS_PROFILE_CALL + APRS_CALL_MAX == APRS_PROFILE_LEN,
