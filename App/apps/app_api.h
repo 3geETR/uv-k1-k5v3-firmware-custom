@@ -306,10 +306,13 @@ typedef struct app_api {
     uint16_t (*af_capture_sample)(void);   /* one bounded 12-bit conversion  */
     void     (*af_capture_close)(void);
 
-    /* Free-running count of 48 MHz core cycles: the 10 ms tick and the SysTick
-     * phase, read race-free. Wraps every ~89 s, the first time ~10 s after the
-     * app starts (on purpose): compare with a signed difference,
-     * (int32_t)(api->cycles_48mhz() - next) < 0, never with < or >. */
+    /* Per-application-run count of 48 MHz core cycles: the 10 ms tick and the
+     * SysTick phase, read race-free. It wraps every ~89.5 s; its origin is
+     * deliberately rebased before entry so the first wrap occurs ~10 s after
+     * launch and exposes unsafe direct comparisons early. Never order readings
+     * with < or >. Use app_cycles_before() / app_cycles_reached() for deadlines
+     * less than 2^31 cycles (~44.7 s) away, or unsigned subtraction to measure
+     * an elapsed interval shorter than one full wrap. */
     uint32_t (*cycles_48mhz)(void);
 
     /* ---- API level 3: the frequency as the main screen draws it ----
@@ -331,6 +334,18 @@ _Static_assert(__builtin_offsetof(app_api_t, append_i32) == 328u,
 /* The level 3 table, frozen: a new service goes after it, with a new level. */
 _Static_assert(sizeof(app_api_t) == 356u,
                "the level 3 API table must stay 356 bytes");
+
+/* Wrap-safe modular ordering for deadlines less than half a cycle-counter
+ * period away (~44.7 s at 48 MHz). Unused helpers emit no application code. */
+static inline bool app_cycles_before(uint32_t now, uint32_t deadline)
+{
+    return (int32_t)(now - deadline) < 0;
+}
+
+static inline bool app_cycles_reached(uint32_t now, uint32_t deadline)
+{
+    return !app_cycles_before(now, deadline);
+}
 
 /* BK4819 AF modes for set_af (mirror driver/bk4819.h values). */
 enum { APP_AF_MUTE = 0, APP_AF_FM = 1, APP_AF_AM = 7 };
