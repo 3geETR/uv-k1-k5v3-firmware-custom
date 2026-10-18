@@ -164,6 +164,12 @@ uint8_t APP_ValidateSlot(uint8_t slot, app_header_t *out_header);
  * Returns when the app exits; the internal flash is never touched. */
 uint8_t APP_LaunchOverlay(uint8_t slot);
 
+/* An open RX audio capture (af_capture_open) holds the ADC on PA4: Yield puts
+ * the battery channel back for one conversion and returns whether it did, Resume
+ * takes PA4 back. Used by BOARD_ADC_GetBatteryInfo(). */
+bool    APP_AfCaptureYieldAdc(void);
+void    APP_AfCaptureResumeAdc(void);
+
 /* Launch the first installed app advertising this shortcut bit. */
 uint8_t APP_LaunchOverlayShortcut(uint8_t shortcut);
 

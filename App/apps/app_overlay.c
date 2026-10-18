@@ -664,14 +664,25 @@ static void app_draw_battery(void)
 }
 static void app_battery_sample(void)
 {
-    /* The battery is on ADC channel 8: an open capture yields it for the
-     * sample, then takes PA4 back. */
-    const bool capture = app_afc.open;
-    if (capture)
-        app_afc_select_battery();
-    BATTERY_Sample(false);
-    if (capture)
-        app_afc_select_pa4();
+    BATTERY_Sample(false);   /* yields an open capture's ADC by itself */
+}
+
+/* BOARD_ADC_GetBatteryInfo() converts whatever channel the ADC is set to, so
+ * with a capture open it would read the RX audio as the battery voltage. It
+ * calls these two around every conversion: the battery channel 8 for the
+ * read, then PA4 back. Any resident battery read is covered that way, not
+ * only the battery_sample() service. */
+bool APP_AfCaptureYieldAdc(void)
+{
+    if (!app_afc.open)
+        return false;
+    app_afc_select_battery();
+    return true;
+}
+
+void APP_AfCaptureResumeAdc(void)
+{
+    app_afc_select_pa4();
 }
 
 /* ---- v2 TX (beacon) ---- */
