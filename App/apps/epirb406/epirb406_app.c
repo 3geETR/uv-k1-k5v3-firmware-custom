@@ -71,6 +71,7 @@
 #define BODY_BOTTOM 39u
 #define BEEP_HZ     1536u   /* 3 << 9: a cheap Thumb constant */
 #define BEEP_MS     150u
+#define SETTLE_MS   50u     /* tune(): REG_30 cycle to amplifier on (5 ms clicked) */
 
 typedef struct {
     dec406_info_t info;
@@ -145,6 +146,7 @@ static void tune(void){
     g.A->bk_write(REG_38,(uint16_t)(f&0xFFFFu));
     g.A->bk_write(REG_39,(uint16_t)(f>>16));
     g.A->tones_off_rx();         /* REG_30 to 0 then RX: VCO recalibration, relock */
+    g.A->delay_ms(SETTLE_MS);    /* the AF output re-centres on the PA4 bias: amplifier still off */
     rxAudio();
 }
 /* "433.645" from 10 Hz units, rounded to the kHz, without division */
