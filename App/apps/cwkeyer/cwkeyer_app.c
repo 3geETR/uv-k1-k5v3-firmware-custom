@@ -78,6 +78,14 @@
 #define PLL_LOCK_MS           2u
 #define MARK_MAX_MS      10000u
 #define SERVICE_MS          10u
+/* The bar is 7 px high, centred in the 17 free rows between the frequency
+ * (down to y = 14) and the settings capsules (from y = 32): y = 20 to 26,
+ * so it spans lines 2 and 3, shifted down by 4 bits. */
+#define SMETER_LINE          2u
+#define SMETER_BARS         13u   /* S1-S9, then +10 to +40 dB */
+#define SMETER_S9_GAP        3u   /* extra columns between S9 and +10 dB */
+#define SMETER_X  ((128u - SMETER_BARS * 5u - SMETER_S9_GAP) / 2u)
+#define SMETER_EVERY_MS    100u
 #define BATTERY_MS         500u
 #define F_X                  72u
 #define DEBOUNCE_POLLS        3u   /* straight key: ~3.5 ms of stable reading */
@@ -154,6 +162,7 @@ static struct {
     int16_t calSteps, tuneOffset10Hz;
     uint16_t rxPitchHz, breakInMs, xtalBase;
     uint16_t serviceMs, batteryMs, markMs, hangElapsedMs;
+    uint8_t smLevel, smDecay, smMs;
     uint32_t uiCandidateAt, navRepeatAt;
 } g;
 
@@ -238,20 +247,21 @@ static void fadeAudioGain(uint16_t base, bool up)
 
 static void configureCwRx(bool enableAudio)
 {
-    uint32_t frequency = tunedFrequency(A->rx_freq());
-    const uint32_t pitch = (uint32_t)A->uidivmod(g.rxPitchHz, 10u);
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    uint32_t frequency = tunedFrequency(a->rx_freq());
+    const uint32_t pitch = (uint32_t)a->uidivmod(g.rxPitchHz, 10u);
     if (frequency > pitch)
         frequency -= pitch;
 
-    A->bk_write(REG_FREQ_LOW, (uint16_t)frequency);
-    A->bk_write(REG_FREQ_HIGH, (uint16_t)(frequency >> 16));
-    const uint16_t rxLink = A->bk_read(REG_TX_LINK);
-    A->bk_write(REG_TX_LINK, TX_LINK_OFF);
-    A->bk_write(REG_TX_LINK, rxLink);
+    a->bk_write(REG_FREQ_LOW, (uint16_t)frequency);
+    a->bk_write(REG_FREQ_HIGH, (uint16_t)(frequency >> 16));
+    const uint16_t rxLink = a->bk_read(REG_TX_LINK);
+    a->bk_write(REG_TX_LINK, TX_LINK_OFF);
+    a->bk_write(REG_TX_LINK, rxLink);
 
     /* Use the BK4829 USB baseband output as a CW product detector. Tuning the
      * receiver below the carrier produces the configured receive tone. */
-    A->bk_write(REG_AM_CTRL, A->bk_read(REG_AM_CTRL) & 0xFFFEu);
+    a->bk_write(REG_AM_CTRL, a->bk_read(REG_AM_CTRL) & 0xFFFEu);
     static const uint16_t rxProfile[][2] = {
         { REG_RX_LEVEL, 0x6B5Au }, { REG_RX_FILTER_1, 0x7400u },
         { REG_RX_FILTER_2, 0u }, { REG_RX_FILTER_3, 0x9890u },
@@ -259,38 +269,39 @@ static void configureCwRx(bool enableAudio)
         { REG_AUDIO_FILTER, 0u },
     };
     for (uint8_t i = 0u; i < 7u; i++)
-        A->bk_write((uint8_t)rxProfile[i][0], rxProfile[i][1]);
-    A->bk_write(REG_AFC, A->bk_read(REG_AFC) | 0x0010u);
-    A->set_agc(true);
-    A->set_af(AF_USB);
-    const uint16_t gainBase = A->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
+        a->bk_write((uint8_t)rxProfile[i][0], rxProfile[i][1]);
+    a->bk_write(REG_AFC, a->bk_read(REG_AFC) | 0x0010u);
+    a->set_agc(true);
+    a->set_af(AF_USB);
+    const uint16_t gainBase = a->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
     setAudioGain(gainBase, enableAudio ? AUDIO_DAC_GAIN_MAX : 0u);
     /* CW must not use the FM squelch gate: its opening delay clips dits and
      * repeatedly chops the recovered tone at every carrier transition. */
-    A->audio_path(enableAudio && g.speaker);
+    a->audio_path(enableAudio && g.speaker);
 }
 
 static void returnToRx(void)
 {
+    const app_api_t *const a = A;   /* one load: calls may change g */
     /* Fade the AF DAC before toggling AUDIO_PA_EN, then restore it only after
      * the USB output and the amplifier have both settled. */
-    uint16_t gainBase = A->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
+    uint16_t gainBase = a->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
     if (g.speaker)
         fadeAudioGain(gainBase, false);
     else
         setAudioGain(gainBase, 0u);
-    A->set_af(AF_USB);
-    A->delay_ms(20u);
-    A->audio_path(false);
-    A->delay_ms(10u);
-    A->tx_end();
+    a->set_af(AF_USB);
+    a->delay_ms(20u);
+    a->audio_path(false);
+    a->delay_ms(10u);
+    a->tx_end();
     g.txReady = false;
     g.hangElapsedMs = 0u;
     configureCwRx(false);
     if (g.speaker) {
-        A->delay_ms(20u);
-        A->audio_path(true);
-        A->delay_ms(20u);
+        a->delay_ms(20u);
+        a->audio_path(true);
+        a->delay_ms(20u);
         fadeAudioGain(gainBase, true);
     } else {
         setAudioGain(gainBase, AUDIO_DAC_GAIN_MAX);
@@ -328,44 +339,104 @@ static void drawConfigTag(const char *s, bool right, uint8_t line)
 
 static void drawStatus(uint16_t title, uint8_t titleChars)
 {
-    A->status_clear();
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    a->status_clear();
     char t[TEXT_MAX];
-    A->print_inverse(text(t, title), 2u, 0u, true, true,
+    a->print_inverse(text(t, title), 2u, 0u, true, true,
                      (uint8_t)(2u + titleChars * 4u));
-    A->print_tiny(APP_VERSION, 92u, 1u, true, false);
-    A->draw_battery();
+    a->print_tiny(APP_VERSION, 92u, 1u, true, false);
+    a->draw_battery();
 }
 
 static void drawBigFrequency(char *s)
 {
+    const app_api_t *const a = A;   /* one load: calls may change g */
     formatFrequency(s);
     const uint8_t n = slen(s);
     if (n < 3u) {
-        A->print_normal(s, (uint8_t)((128u - n * 7u) >> 1), 127u, 1u);
+        a->print_normal(s, (uint8_t)((128u - n * 7u) >> 1), 127u, 1u);
         return;
     }
     const uint8_t width = (uint8_t)((n - 3u) * 13u + 17u);
     const uint8_t x = (uint8_t)((128u - width) >> 1);
     char tail[3] = { s[n - 2u], s[n - 1u], '\0' };
     s[n - 2u] = '\0';
-    A->display_freq(s, x, 0u, false);
+    a->display_freq(s, x, 0u, false);
     /* End must stay zero as in APRS; a larger End re-centers the small tail. */
-    A->print_normal(tail, (uint8_t)(x + (n - 3u) * 13u + 3u), 0u, 1u);
+    a->print_normal(tail, (uint8_t)(x + (n - 3u) * 13u + 3u), 0u, 1u);
 }
 
 static void drawMainStatus(void)
 {
+    const app_api_t *const a = A;   /* one load: calls may change g */
     char t[TEXT_MAX];
     drawStatus(T_TITLE, T_TITLE_CHARS);
     if (g.denied || !g.txReady) {
         text(t, g.denied ? T_DENIED : T_READY);
-        A->print_inverse(t, 43u, 0u, true, true,
+        a->print_inverse(t, 43u, 0u, true, true,
                          (uint8_t)(43u + slen(t) * 4u));
     }
     if (g.fArm)
-        A->asset_read(BMP_F, A->status_line + F_X, BMP_F_LEN);
+        a->asset_read(BMP_F, a->status_line + F_X, BMP_F_LEN);
     else if (g.speaker)
-        A->asset_read(BMP_SPEAKER, A->status_line + F_X, BMP_SPEAKER_LEN);
+        a->asset_read(BMP_SPEAKER, a->status_line + F_X, BMP_SPEAKER_LEN);
+}
+
+/* S-meter as the main screen draws it (ui/main.c DisplayRSSIBar): S9 at
+ * -93 dBm, 6 dB per S-unit below it, one more bar per 10 dB above it. */
+static uint8_t smeterLevel(void)
+{
+    const int16_t dbm = A->rssi_dbm();
+    uint8_t level = 0u;
+    int16_t v;
+    if (dbm >= -93) {
+        level = 9u;
+        for (v = (int16_t)(dbm + 93); v >= 10 && level < SMETER_BARS; v -= 10)
+            level++;
+    } else {
+        for (v = (int16_t)(dbm + 147); v >= 6; v -= 6)
+            level++;
+    }
+    return level;
+}
+
+/* Thirteen boxes of the same size, filled up to the level: the empty ones
+ * keep the scale visible, and a wider gap after the ninth sets the
+ * +10 to +40 dB boxes apart from S1-S9. */
+static void drawSmeter(void)
+{
+    uint8_t *p = A->fb[SMETER_LINE] + SMETER_X;       /* upper part, line 2 */
+    uint8_t *q = A->fb[SMETER_LINE + 1u] + SMETER_X;  /* lower part, line 3 */
+    for (uint8_t i = 0u; i < SMETER_BARS; i++) {
+        const bool lit = i < g.smLevel;
+        p[0] = p[3] = 0xF0u;                /* box edges: 0x7F << 4 */
+        q[0] = q[3] = 0x07u;
+        p[1] = p[2] = lit ? 0xF0u : 0x10u;  /* filled, or 0x41 << 4 */
+        q[1] = q[2] = lit ? 0x07u : 0x04u;
+        const uint8_t step = i == 8u ? 5u + SMETER_S9_GAP : 5u;   /* box 9 is S9 */
+        p += step;
+        q += step;
+    }
+}
+
+/* Every SMETER_EVERY_MS while receiving. A CW signal comes and goes with each
+ * element, so the bar holds its peak: it rises at once and falls one bar
+ * every second update. Only the S-meter line goes to the display. */
+static void serviceSmeter(void)
+{
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    const uint8_t level = smeterLevel();
+    uint8_t shown = g.smLevel;
+    if (level >= shown)
+        shown = level;
+    else if ((g.smDecay ^= 1u) != 0u)
+        shown--;
+    if (shown != g.smLevel) {
+        g.smLevel = shown;
+        drawSmeter();
+        a->blit_line(SMETER_LINE);
+        a->blit_line(SMETER_LINE + 1u);
+    }
 }
 
 static void drawMain(void)
@@ -399,6 +470,7 @@ static void drawMain(void)
     out = putCalibration(out);
     *out = '\0';
     drawConfigTag(s, false, 6u);
+    drawSmeter();
     drawConfigTag(right, true, 6u);
 }
 
@@ -434,26 +506,30 @@ static void sidetone(bool on)
     A->bk_write(REG_TONE_FREQ, on ? toneControlWord(g.rxPitchHz) : 0u);
 }
 
-static void rampUp(void)
+/* PA bias in four 1 ms steps, 1/4, 1/2, 3/4 and full drive going up, the
+ * same levels the other way down to 0. */
+static void rampBias(bool up)
 {
     const uint8_t quarter = (uint8_t)(g.paBias >> 2);
-    const uint8_t half = (uint8_t)(g.paBias >> 1);
-    A->bk_write(REG_TX_LINK, TX_LINK_NO_MIC);
-    A->tx_carrier(true);
-    writeBias(quarter);                         A->delay_ms(1u);
-    writeBias(half);                            A->delay_ms(1u);
-    writeBias((uint8_t)(g.paBias - quarter));  A->delay_ms(1u);
-    writeBias(g.paBias);                        A->delay_ms(1u);
+    const uint8_t level[5] = { 0u, quarter, (uint8_t)(g.paBias >> 1),
+                               (uint8_t)(g.paBias - quarter), g.paBias };
+    for (uint8_t i = 1u; i <= 4u; i++) {
+        writeBias(level[up ? i : 4u - i]);
+        A->delay_ms(1u);
+    }
+}
+
+static void rampUp(void)
+{
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    a->bk_write(REG_TX_LINK, TX_LINK_NO_MIC);
+    a->tx_carrier(true);
+    rampBias(true);
 }
 
 static void rampDown(void)
 {
-    const uint8_t quarter = (uint8_t)(g.paBias >> 2);
-    const uint8_t half = (uint8_t)(g.paBias >> 1);
-    writeBias((uint8_t)(g.paBias - quarter));  A->delay_ms(1u);
-    writeBias(half);                            A->delay_ms(1u);
-    writeBias(quarter);                         A->delay_ms(1u);
-    writeBias(0u);                              A->delay_ms(1u);
+    rampBias(false);
     A->tx_carrier(false);
     A->bk_write(REG_TX_LINK, TX_LINK_NO_PA);
 }
@@ -537,49 +613,50 @@ static uint8_t debounced(uint8_t p)
 
 static bool prepareTx(void)
 {
-    if (A->tx_state() != 0u) {
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    if (a->tx_state() != 0u) {
         g.denied = true;
         g.redraw = true;
         return false;
     }
 
-    A->audio_path(false);
-    A->tx_set_params();
-    const uint16_t pa = A->bk_read(REG_PA_BIAS);
+    a->audio_path(false);
+    a->tx_set_params();
+    const uint16_t pa = a->bk_read(REG_PA_BIAS);
     g.paBias = (uint8_t)(pa >> 8);
     g.paControl = (uint8_t)pa;
 
     /* tx_set_params is atomic and returns with RF enabled. Remove PA drive
      * immediately, apply the calibrated frequency, then start every mark with
      * the same controlled ramp. REG_38/39 use 10 Hz synthesizer units. */
-    A->tx_carrier(false);
+    a->tx_carrier(false);
     writeBias(0u);
 
     /* REG_50 mutes modulation, not the RF carrier. Keep it muted for the whole
      * keying session, remove every modulation source, and disable the mic ADC.
      * RF is keyed with internal PA gain, external PA bias and PA_ENABLE. */
-    A->tx_mute(true);
-    A->bk_write(REG_SUBAUDIO, 0u);
-    A->bk_write(REG_TONE, 0u);
-    const uint32_t frequency = tunedFrequency(A->tx_freq());
-    A->bk_write(REG_FREQ_LOW, (uint16_t)frequency);
-    A->bk_write(REG_FREQ_HIGH, (uint16_t)(frequency >> 16));
+    a->tx_mute(true);
+    a->bk_write(REG_SUBAUDIO, 0u);
+    a->bk_write(REG_TONE, 0u);
+    const uint32_t frequency = tunedFrequency(a->tx_freq());
+    a->bk_write(REG_FREQ_LOW, (uint16_t)frequency);
+    a->bk_write(REG_FREQ_HIGH, (uint16_t)(frequency >> 16));
 
     /* REG_38/39 are written after tx_set_params, so restart the TX link to
      * recalibrate the VCO and latch the corrected synthesizer frequency. Keep
      * internal PA gain disabled when the link comes back up. */
-    A->bk_write(REG_TX_LINK, TX_LINK_OFF);
-    A->bk_write(REG_TX_LINK, TX_LINK_NO_PA);
-    A->delay_ms(PLL_LOCK_MS);
+    a->bk_write(REG_TX_LINK, TX_LINK_OFF);
+    a->bk_write(REG_TX_LINK, TX_LINK_NO_PA);
+    a->delay_ms(PLL_LOCK_MS);
 
     /* AF_ALAM is the BK4829's local alarm/tone output. Unlike AF_BEEP, it
      * remains audible while REG_50 keeps the TX modulation path muted. Keep
      * Tone1 enabled and key it through REG_71; rewriting REG_70 on every Morse
      * edge produces an audible pop. */
-    A->bk_write(REG_TONE, TONE1_CONFIG);
+    a->bk_write(REG_TONE, TONE1_CONFIG);
     sidetone(false);
-    A->set_af(AF_ALAM);
-    A->audio_path(g.speaker);
+    a->set_af(AF_ALAM);
+    a->audio_path(g.speaker);
     g.txReady = true;
     g.denied = false;
     g.statusRedraw = true;
@@ -622,9 +699,10 @@ static void disarm(void)
 
 static void serviceOneMs(void)
 {
-    A->delay_ms(1u);
-    if (g.keyDown)
-        g.hangElapsedMs = 0u;
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    a->delay_ms(1u);
+    /* hangElapsedMs needs no reset here: keyOn() zeroes it and it only counts
+     * while the key is up. */
     if (g.keyDown && ++g.markMs >= MARK_MAX_MS) {
         keyOff();
         if (g.txReady)
@@ -637,17 +715,22 @@ static void serviceOneMs(void)
     }
     if (++g.serviceMs >= SERVICE_MS) {
         g.serviceMs = 0u;
-        A->backlight_update();
+        a->backlight_update();
+        /* Receiving only: no RX while the carrier is up or during break-in. */
+        if (!g.txReady && (g.smMs = (uint8_t)(g.smMs + SERVICE_MS)) >= SMETER_EVERY_MS) {
+            g.smMs = 0u;
+            serviceSmeter();
+        }
         g.batteryMs = (uint16_t)(g.batteryMs + SERVICE_MS);
         if (g.batteryMs >= BATTERY_MS) {
             g.batteryMs = 0u;
             if (!g.txReady) {
-                A->battery_sample();
+                a->battery_sample();
                 g.statusRedraw = true;
             }
             /* A sleeping overlay consumes the first SIDE press as a wake key.
              * Keep the keyer awake so a dit or dah is never discarded. */
-            A->backlight_on();
+            a->backlight_on();
         }
     }
 }
@@ -695,19 +778,23 @@ static void runPaddle(uint8_t p)
     }
 }
 
+/* One step up or down, refused when it would leave [lo, hi]: the bounded
+ * settings and the frequency offset all follow this rule. */
+static bool stepWithin(int16_t *value, int8_t direction, int16_t step,
+                       int16_t lo, int16_t hi)
+{
+    const int16_t next = (int16_t)(*value + direction * step);
+    if (next < lo || next > hi)
+        return false;
+    *value = next;
+    return true;
+}
+
 static bool adjustFrequency(int8_t direction)
 {
-    if (direction > 0) {
-        if (g.tuneOffset10Hz > TUNE_MAX_10HZ - TUNE_STEP_10HZ)
-            return false;
-        g.tuneOffset10Hz += TUNE_STEP_10HZ;
-    } else if (direction < 0) {
-        if (g.tuneOffset10Hz < -TUNE_MAX_10HZ + TUNE_STEP_10HZ)
-            return false;
-        g.tuneOffset10Hz -= TUNE_STEP_10HZ;
-    } else {
+    if (!stepWithin(&g.tuneOffset10Hz, direction, TUNE_STEP_10HZ,
+                    -TUNE_MAX_10HZ, TUNE_MAX_10HZ))
         return false;
-    }
 
     if (g.txReady)
         returnToRx();
@@ -733,51 +820,29 @@ static void adjustSetting(uint8_t key, int8_t direction)
             g.port = (uint8_t)(g.port ^ 1u);
             portSet(true);
             break;
-        case APP_KEY_2:
-            if (direction > 0) {
-                if (g.wpm >= WPM_MAX)
-                    return;
-                g.wpm++;
-            } else {
-                if (g.wpm <= WPM_MIN)
-                    return;
-                g.wpm--;
-            }
-            break;
-        case APP_KEY_3:
-            if (direction > 0 && g.rxPitchHz <= RX_PITCH_MAX - RX_PITCH_STEP) {
-                g.rxPitchHz = (uint16_t)(g.rxPitchHz + RX_PITCH_STEP);
-            } else if (direction < 0 &&
-                       g.rxPitchHz >= RX_PITCH_MIN + RX_PITCH_STEP) {
-                g.rxPitchHz = (uint16_t)(g.rxPitchHz - RX_PITCH_STEP);
-            } else {
+        case APP_KEY_2: {
+            int16_t wpm = g.wpm;
+            if (!stepWithin(&wpm, direction, 1, WPM_MIN, WPM_MAX))
                 return;
-            }
+            g.wpm = (uint8_t)wpm;
+            break; }
+        case APP_KEY_3:
+            if (!stepWithin((int16_t *)&g.rxPitchHz, direction, RX_PITCH_STEP,
+                            RX_PITCH_MIN, RX_PITCH_MAX))
+                return;
             retune = true;
             break;
         case APP_KEY_4:
-            if (direction > 0 && g.breakInMs <= BREAKIN_MAX - BREAKIN_STEP) {
-                g.breakInMs = (uint16_t)(g.breakInMs + BREAKIN_STEP);
-            } else if (direction < 0 &&
-                       g.breakInMs >= BREAKIN_MIN + BREAKIN_STEP) {
-                g.breakInMs = (uint16_t)(g.breakInMs - BREAKIN_STEP);
-            } else {
+            if (!stepWithin((int16_t *)&g.breakInMs, direction, BREAKIN_STEP,
+                            BREAKIN_MIN, BREAKIN_MAX))
                 return;
-            }
             break;
         case APP_KEY_5:
             g.reverse = !g.reverse;
             break;
         case APP_KEY_6:
-            if (direction > 0) {
-                if (g.calSteps >= CAL_MAX)
-                    return;
-                g.calSteps++;
-            } else {
-                if (g.calSteps <= CAL_MIN)
-                    return;
-                g.calSteps--;
-            }
+            if (!stepWithin(&g.calSteps, direction, 1, CAL_MIN, CAL_MAX))
+                return;
             A->bk_write(REG_XTAL, (uint16_t)(g.xtalBase + g.calSteps));
             retune = true;
             break;
