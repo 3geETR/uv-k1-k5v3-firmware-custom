@@ -392,7 +392,7 @@ void APP_MenuOpen(void)
                  * a target that failed is named, and the app that ended the
                  * chain picks the screen to return to. */
                 app_header_t hdr;
-                APP_SlotInfo(APP_LastLaunchedSlot(), &hdr);
+                APP_SlotInfo(gAppLastSlot, &hdr);
                 if (rc != APP_OK)
                     app_show_error(&hdr, rc);               /* no longer silent */
                 APP_WaitKeyRelease();

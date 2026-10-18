@@ -15,6 +15,10 @@
  *         the peer must show "EMPTY OK" and stay.  Neither app waits for the
  *         key that launched it, so without the loader's release wait the peer
  *         would see 3 held and bounce straight back.
+ *   4     runaway chain, fast: A and B bounce a LOOP message back at once,
+ *         for ever.  The loader must stop it after 8 quick hops: Apps menu.
+ *   5     runaway chain, slow: each app shows "LOOP" for half a second, then
+ *         bounces back.  A long EXIT press must stop it: Apps menu.
  *   EXIT  leave normally (Apps menu).
  *
  * Names are plain C strings, shorter than APP_NAME_LEN.  Every launch also
@@ -42,7 +46,7 @@ void *memcpy(void *d, const void *s, size_t n)
 #endif
 #define MISSING "No Such App"
 
-enum { MSG_PING = 'P', MSG_PONG = 'R' };
+enum { MSG_PING = 'P', MSG_PONG = 'R', MSG_LOOP_FAST = 'F', MSG_LOOP_SLOW = 'S' };
 #define PING_LEN 40u   /* longer than APP_HANDOFF_MAX on purpose: must arrive clamped */
 
 static const app_api_t *A;
@@ -85,6 +89,20 @@ void app_main(const app_api_t *api)
 
     const int16_t n = A->handoff_read(msg, sizeof(msg), from);
     const bool once = A->handoff_read(NULL, 0, NULL) < 0;
+
+    /* Runaway chains: bounce straight back, nothing else, no key read. */
+    if (n == 1 && (msg[0] == MSG_LOOP_FAST || msg[0] == MSG_LOOP_SLOW)) {
+        if (msg[0] == MSG_LOOP_SLOW) {
+            A->backlight_on();
+            A->display_clear();
+            A->print_bold(SELF, 0, 127, 0);
+            show(2, "LOOP, HOLD EXIT");
+            A->blit_full();
+            A->delay_ms(500);
+        }
+        A->handoff(PEER, msg, 1);
+        return;
+    }
 
     uint8_t count = 0;
 #ifndef HANDOFF_B
@@ -166,6 +184,11 @@ void app_main(const app_api_t *api)
             show(5, "PEER MISSING");
         } else if (key == APP_KEY_1) {
             show(5, A->handoff(MISSING, NULL, 0) ? "MISS ACCEPTED BAD" : "MISS REFUSED OK");
+        } else if (key == APP_KEY_4 || key == APP_KEY_5) {
+            msg[0] = key == APP_KEY_4 ? MSG_LOOP_FAST : MSG_LOOP_SLOW;
+            if (A->handoff(PEER, msg, 1))
+                return;
+            show(5, "PEER MISSING");
         } else if (key == APP_KEY_2) {
             A->handoff(PEER, NULL, 0);
             A->handoff(MISSING, NULL, 0);

@@ -315,7 +315,10 @@ typedef struct app_api {
      * compatible app with that name returns false and leaves nothing pending,
      * which also cancels an earlier call.  Copies min(len, APP_HANDOFF_MAX)
      * bytes from msg; a longer len is clamped.  len 0 (msg may then be NULL)
-     * is a hand-off without payload: the target still learns its sender. */
+     * is a hand-off without payload: the target still learns its sender.
+     * A chain that never ends is cut back to the menu: a long EXIT press
+     * between two apps, or 8 hand-offs in a row from apps that each ran less
+     * than 300 ms. */
     bool    (*handoff)(const char *name, const void *msg, uint8_t len);
     /* The message handed to this app and its sender's name.  Returns -1 when
      * the app was launched from the menu or a shortcut (buf and from are then

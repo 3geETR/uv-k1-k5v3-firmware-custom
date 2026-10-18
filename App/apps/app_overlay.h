@@ -167,10 +167,11 @@ uint8_t APP_LaunchOverlay(uint8_t slot);
 /* The slot of the last app APP_LaunchOverlay ran or tried to launch: the app
  * that ended a hand-off chain, or the target that failed.  Its header names
  * the app in an error and holds the APP_FLAG_EXIT_TO_MAIN that applies. */
-uint8_t APP_LastLaunchedSlot(void);
+extern uint8_t gAppLastSlot;
 
-/* Block until no key and no PTT has been down for 100 ms. */
-void    APP_WaitKeyRelease(void);
+/* Block until no key and no PTT has been down for 100 ms.  Returns true on a
+ * long EXIT press meanwhile (the loader then ends a hand-off chain). */
+bool    APP_WaitKeyRelease(void);
 
 /* Launch the first installed app advertising this shortcut bit. */
 uint8_t APP_LaunchOverlayShortcut(uint8_t shortcut);
