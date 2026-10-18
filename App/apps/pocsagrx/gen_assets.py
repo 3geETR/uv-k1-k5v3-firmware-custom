@@ -19,8 +19,8 @@ UI = [
     ("T_TITLE",  TITLE),
     ("T_DBM",    "dBm  func "),             # "-89dBm  func 3  last 02m15"
     ("T_LAST",   "  last "),                # 30 characters at most (a tiny row holds 32)
-    ("T_SYN",    "syn "),                   # until a first page, or key 3:
-    ("T_OK",     " ok"),                    # "syn 5 ok 32 32 0 31 32"
+    ("T_PRE",    "pre "),                   # until a first page, or key 3:
+                                            # "pre 512 1200:0/0 512:3/96"
 ]
 
 a = Assets("POCSAGRX")

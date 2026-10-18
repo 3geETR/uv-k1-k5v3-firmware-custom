@@ -16,9 +16,11 @@
 
 /*
  * POCSAG RX - receives POCSAG pager transmissions at 1200 bauds (as the
- * amateur DAPNET network sends them) in software and keeps the last five
- * pages, shown one at a time: address (RIC), text, function. Tune the VFO (FM;
- * 439.9875 MHz for DAPNET, or 433.650 MHz for the Flipper Zero bench files of
+ * amateur DAPNET network sends them) and at 512 bauds, both at once, in
+ * software, and keeps the last five pages, shown one at a time: address (RIC),
+ * text, function. The rate of each preamble heard (512, 1200 or 2400, the
+ * last not decoded) is shown with key 3. Tune the VFO (FM; 439.9875 MHz for
+ * DAPNET, or 433.650 MHz for the Flipper Zero bench files of
  * test/flipper_pocsag.py), then launch.
  *
  * POCSAG keys the carrier frequency with the bits themselves: the discriminator
@@ -26,8 +28,9 @@
  * HPF300 / LPF3K / de-emphasis and AFC off, as EPIRB 406) and the audio is read
  * as APRS RX does: PA4 held at mid-scale by the MCU DAC, ADC channel 4 at
  * 9.6 kHz, timed from SysTick, continuously. Each sample goes through the
- * demodulator modelled and tested in test/model_rx.py: half-bit box filter,
- * then 3 hysteresis slicers. The audio path cuts the low frequencies, so a
+ * demodulator modelled and tested in test/model_rx.py: two lanes, 1200 and
+ * 512 bauds, each a box filter of about half a bit then 3 hysteresis
+ * slicers. The audio path cuts the low frequencies, so a
  * run of equal bits droops back to zero and a slicer comparing the level with
  * a threshold reads noise there (the first build did, and found nothing): each
  * slicer flips its level on the pulse a change of bit leaves and holds in
@@ -47,7 +50,8 @@
  *   pressed again at either end: the newer / older page · * normal view /
  *   compact view (saved) · 1 speaker on/off (saved, off by default; not gated
  *   by the squelch: the receiver's hiss is heard) · 2 clear · 3 bottom line:
- *   level and age of the page / what each slicer reads · EXIT quit.
+ *   level and age of the page / preamble rate and what each lane reads ·
+ *   EXIT quit.
  * The loader re-runs RADIO_SetupRegisters on exit; the resident capture
  * (af_capture_close) restores the ADC, PA4, the DAC and its clock.
  */
@@ -69,24 +73,34 @@
 #define LED_STEP       960u    /* samples per step of the LED blink (100 ms)     */
 #define LED_STEPS      4u      /* a new page: on, off, on, off                   */
 #define SYNC_SLOT      8u      /* a due slot is served while the slicers have read
-                                  less than 8 bits of a sync codeword: 20 ms left,
-                                  no page bit lost                              */
+                                  less than 8 bits of a sync codeword: 20 ms left
+                                  at 1200 bauds, 47 ms at 512, no page bit lost  */
 #define REFRESH_SLOTS  100u    /* 100 housekeeping slots = 5 s (battery, age)    */
 #define REDRAW_ON      1u      /* g.redraw: a key or the periodic refresh        */
 #define REDRAW_FRAME   2u      /* g.redraw: a page, also wakes the backlight     */
-#define DUP_SAMPLES    128u    /* address codewords this close (half a codeword
-                                  of 256 samples) are the same page, read by
-                                  another slicer                                 */
 
 /* ---- BK4829 RAW receive (EPIRB 406) ---- */
 #define REG_2B      0x2B   /* <10:8> = 1: RX HPF300, LPF3K, de-emphasis off  */
 #define REG_73      0x73   /* <4> = 1: AFC off (it would follow the bits)    */
 
-/* ---- demodulator (test/model_rx.py, class Demod) ---- */
-#define PLL_STEP    8192   /* 65536 per bit / 8 samples per bit             */
-#define PLL_CTR     36864  /* transitions pulled to mid-bit + half a sample */
+/* ---- demodulator (test/model_rx.py, classes Demod, Lane, Slicer, RateFinder).
+ * Two lanes side by side, one per baud rate, each with its box filter (about
+ * half a bit), its DPLL step and three slicers: the sync codeword tells which
+ * one a transmission is at. ---- */
+#define NLANE       2      /* lane 0: 1200 bauds, lane 1: 512 bauds          */
+#define NSL         3      /* slicers per lane: thresholds at 2/8, 3/8, 4/8 of the peak */
+#define STEP_1200   8192u  /* DPLL step, 65536 per bit: 8 samples per bit    */
+#define STEP_512    3495u  /* 65536 x 512 / 9600: 18.75 samples per bit      */
+#define DUP_1200    128u   /* address codewords this close (half a codeword,  */
+#define DUP_512     300u   /* in samples) are the same page, from another slicer */
+#define BOX_512     8u     /* box samples at 512 bauds (4 at 1200: half a bit) */
 #define PLL_SHIFT   3      /* 1/8 of the error per transition               */
-#define NSL         3      /* slicers: thresholds at 2/8, 3/8, 4/8 of the peak */
+/* The rate of a preamble (1 0 1 0 ... for 576 bits or more): the samples
+ * between two flips of the first 1200-baud slicer, classed; PRE_RUNS flips in
+ * a row in the same class are a preamble at that rate. */
+#define PRE_RUNS    32u
+_Static_assert((BOX_512 & (BOX_512 - 1u)) == 0u && BOX_512 >= 4u,
+               "the 512-baud box shares the 4-sample box's index: a power of two");
 #define DIRTY_WORDS 8u     /* codewords a slicer is not trusted to correct
                               after a bad one                               */
 
@@ -134,7 +148,10 @@ typedef struct {
     uint8_t  badrun;                   /* bad codewords in a row inside the page  */
     uint8_t  excuse;                   /* samples were skipped during this sync
                                           codeword: it is taken as found          */
-    uint16_t ok;                       /* good codewords (key 3 shows them)       */
+    uint16_t ok;                       /* good codewords (key 3: per lane)        */
+    uint16_t step;                     /* DPLL step of its lane (65536 per bit)    */
+    uint16_t dup;                      /* half a codeword of its lane, in samples  */
+    uint8_t  lane;                     /* 0: 1200 bauds, 1: 512 bauds             */
     char     text[MSG_MAX];
 } sl_t;
 
@@ -153,7 +170,11 @@ static struct {
     uint8_t  dbg;                      /* key 3: the bottom line shows the counters */
     uint8_t  led;                      /* steps left of the LED blink             */
     uint16_t ledCnt;                   /* samples of the current step             */
-    uint16_t nSync;                    /* sync codewords found, all slicers       */
+    uint16_t nSync[NLANE];             /* sync codewords found per lane            */
+    uint16_t preRate;                  /* rate of the last preamble (0: none yet)  */
+    uint16_t rfCls;                    /* rate class of the flips being counted    */
+    uint8_t  rfRun, rfStreak;          /* samples since the last flip, flips in a
+                                          row in class rfCls                      */
     uint16_t busyFor;                  /* samples a due slot has waited           */
     uint32_t n;                        /* samples since the launch, those the
                                           housekeeping skipped included           */
@@ -225,9 +246,9 @@ static void closePage(sl_t *m){
     g.redraw|=REDRAW_FRAME;
     for(unsigned j=0;j<g.count;j++){
         page_t *q=g.history[j];
-        /* |at - at'| < DUP_SAMPLES, in one unsigned compare */
+        /* |at - at'| < half a codeword, in one unsigned compare */
         if(q->ric!=m->ric || q->func!=m->func ||
-           (uint32_t)(m->at-q->at+DUP_SAMPLES)>=2u*DUP_SAMPLES) continue;
+           (uint32_t)(m->at-q->at+m->dup)>=2u*m->dup) continue;
         for(unsigned i=0;i<n;i++)
             if(i>=q->len || (uint8_t)q->text[i]==GAP) q->text[i]=(char)t[i];
         if(n>q->len) q->len=(uint8_t)n;
@@ -372,7 +393,7 @@ static void seqBit(sl_t *m,uint32_t b){
             m->inv=e>16u?0xFFFFFFFFu:0u;
             m->word=0;
             m->nb=0;
-            g.nSync++;
+            g.nSync[m->lane]++;
         }
         return;
     }
@@ -407,8 +428,9 @@ static void slice(sl_t *m,int32_t y){
     int32_t r=m->rprev;                   /* holds between the thresholds */
     if(y>t) r=1;
     else if(y<-t) r=-1;
-    m->phase+=PLL_STEP;
-    if((r>0)!=(m->rprev>0)) m->phase+=(PLL_CTR-m->phase)>>PLL_SHIFT;
+    /* changes of level pulled to mid-bit + half a sample: 36864 at 1200 bauds */
+    m->phase+=m->step;
+    if((r>0)!=(m->rprev>0)) m->phase+=(32768+(m->step>>1)-m->phase)>>PLL_SHIFT;
     m->rprev=r;
     if(m->phase>=65536){
         m->phase-=65536;
@@ -503,13 +525,21 @@ static void draw(void){
         }
     }
     else {
-        /* no page yet, or key 3: what each slicer reads, "syn 3 ok 32 32 32":
-         * sync codewords found by all, then the good codewords of each
-         * (thresholds 1/4, 3/8, 1/2). 21 characters at most, the values held
-         * at 99 and 999. */
-        o=put(o,s+T_SYN); o=puti(o,cap(g.nSync,99u));
-        o=put(o,s+T_OK);
-        for(unsigned k=0;k<NSL;k++){ *o++=' '; o=puti(o,cap(g.sl[k].ok,999u)); }
+        /* no page yet, or key 3: the rate of the last preamble heard, then what
+         * each lane reads, "pre 512 1200:0/0 512:3/96": sync codewords found
+         * by its slicers / good codewords of its three slicers. "pre -" until
+         * a preamble; 2400 is told, not decoded. 31 characters at most, the
+         * values held at 99 and 999. */
+        o=put(o,s+T_PRE);
+        if(g.preRate) o=puti(o,g.preRate); else *o++='-';
+        for(unsigned l=0;l<NLANE;l++){
+            unsigned ok=0;
+            for(unsigned k=0;k<NSL;k++) ok+=g.sl[l*NSL+k].ok;
+            *o++=' ';
+            o=puti(o,l?512:1200); *o++=':';
+            o=puti(o,cap(g.nSync[l],99u)); *o++='/';
+            o=puti(o,cap(ok,999u));
+        }
     }
     *o='\0';
     A->print_tiny(str,0,49,false,true);
@@ -532,8 +562,9 @@ static void handleKeys(void){
     }
     else if(key==APP_KEY_EXIT) g.running=false;
     else if(key==APP_KEY_2){
-        g.count=g.cur=0; g.nOk=0; g.top=0; g.nSync=0;
-        for(unsigned k=0;k<NSL;k++) g.sl[k].ok=0;
+        g.count=g.cur=0; g.nOk=0; g.top=0;
+        g.nSync[0]=g.nSync[1]=0; g.preRate=0;
+        for(unsigned k=0;k<NLANE*NSL;k++) g.sl[k].ok=0;
     }
     else if(key==APP_KEY_3) g.dbg^=1u;   /* bottom line: the page's level and age / the counters */
     else if(key==APP_KEY_1) g.spk^=1u;   /* speaker: listen() switches it at the next slot */
@@ -557,16 +588,46 @@ static void house(void){
     A->blit_full();
 }
 
+/* ---- the rate of a preamble (model_rx.py, RateFinder): called each sample
+ * with whether the first 1200-baud slicer flipped. The samples between two
+ * flips are classed, 4, 8 and 18.75 a bit at 9.6 kHz: 3-5 for 2400 bauds,
+ * 6-10 for 1200, 15-23 for 512; PRE_RUNS flips in a row in one class are a
+ * preamble at that rate. Noise and data runs of several bits do not keep one
+ * class that long. ---- */
+static void rateFind(bool flipped){
+    if(g.rfRun<255u) g.rfRun++;
+    if(!flipped) return;
+    unsigned r=g.rfRun, c=0;
+    if(r-3u<=2u) c=2400u;
+    else if(r-6u<=4u) c=1200u;
+    else if(r-15u<=8u) c=512u;
+    g.rfRun=0;
+    if(c && c==g.rfCls){
+        if(g.rfStreak<PRE_RUNS && ++g.rfStreak==PRE_RUNS) g.preRate=(uint16_t)c;
+    } else {
+        g.rfCls=(uint16_t)c;
+        g.rfStreak=1;
+    }
+}
+
 /* ---- the receiver: PA4 at 9.6 kHz, continuously, until EXIT ---- */
 __attribute__((noinline))
 static void listen(void){
     const app_api_t *A=g.A;
-    sl_t sl[NSL];
-    int32_t box[4], sum=0, dc=(int32_t)(BIAS_CODE<<4);
+    sl_t sl[NLANE*NSL];
+    int32_t box4[4], box8[BOX_512], sum4=0, sum8=0, dc=(int32_t)(BIAS_CODE<<4);
     unsigned bi=0;
     memset(sl,0,sizeof sl);
-    memset(box,0,sizeof box);
-    for(unsigned k=0;k<NSL;k++){ sl[k].num=(uint8_t)(2u+k); sl[k].word=HUNT; }   /* 2/8, 3/8, 4/8 */
+    memset(box4,0,sizeof box4);
+    memset(box8,0,sizeof box8);
+    for(unsigned k=0;k<NLANE*NSL;k++){
+        sl_t *m=&sl[k];
+        m->num=(uint8_t)(2u+k%NSL);       /* 2/8, 3/8, 4/8 in each lane */
+        m->word=HUNT;
+        m->lane=(uint8_t)(k>=NSL);
+        m->step=(uint16_t)(m->lane?STEP_512:STEP_1200);
+        m->dup=(uint16_t)(m->lane?DUP_512:DUP_1200);
+    }
 
     g.sl=sl;
     /* The two per-sample services, held in registers: their table slots lie
@@ -580,14 +641,20 @@ static void listen(void){
         while((int32_t)(clk()-next)<0){}
         next+=CYC_PER_SAMPLE;
         g.n++;
-        /* DC removal, then the sum of the last 4 samples (half a bit) */
+        /* DC removal, then the sum of the last 4 samples (half a bit at 1200
+         * bauds) and of the last 8 (512 bauds: 18.75 samples a bit) */
         int32_t adc=sample();
         dc+=((adc<<4)-dc)>>8;
         int32_t x=adc-(dc>>4);
-        sum+=x-box[bi];
-        box[bi]=x;
-        bi=(bi+1u)&3u;
-        for(unsigned k=0;k<NSL;k++) slice(&sl[k],sum);
+        sum4+=x-box4[bi&3u];
+        box4[bi&3u]=x;
+        sum8+=x-box8[bi];
+        box8[bi]=x;
+        bi=(bi+1u)&(BOX_512-1u);
+        int32_t before=sl[0].rprev;
+        for(unsigned k=0;k<NSL;k++) slice(&sl[k],sum4);
+        for(unsigned k=NSL;k<NLANE*NSL;k++) slice(&sl[k],sum8);
+        rateFind(sl[0].rprev!=before);
         /* green LED: two blinks for a new page, a step every 100 ms, ending off */
         if(++g.ledCnt>=LED_STEP){
             g.ledCnt=0;
@@ -598,10 +665,11 @@ static void listen(void){
          * served at once. Inside one it waits for the sync codeword that opens
          * the next batch: every slicer in a batch must have read less than
          * SYNC_SLOT bits of it, so the slot fits in what is left and no page
-         * bit is lost; the keys are then read twice a second. After BUSY_MAX
+         * bit is lost; the keys are then read twice a second (once at 512
+         * bauds, whose batches last 1.06 s). After BUSY_MAX
          * samples of waiting (slicers that disagree) it is served anyway. */
         bool wait=false;
-        for(unsigned k=0;k<NSL;k++){
+        for(unsigned k=0;k<NLANE*NSL;k++){
             unsigned w=sl[k].word;
             if(w!=HUNT && (w!=BATCH_WORDS || sl[k].nb>=SYNC_SLOT)) wait=true;
         }
@@ -620,9 +688,9 @@ static void listen(void){
         while((int32_t)(clk()-next)>=0){
             next+=CYC_PER_SAMPLE;
             g.n++;
-            for(unsigned k=0;k<NSL;k++){
+            for(unsigned k=0;k<NLANE*NSL;k++){
                 if(sl[k].word==BATCH_WORDS) sl[k].excuse=1;
-                sl[k].phase+=PLL_STEP;
+                sl[k].phase+=sl[k].step;
                 if(sl[k].phase>=65536){ sl[k].phase-=65536; seqBit(&sl[k],0); }
             }
         }
