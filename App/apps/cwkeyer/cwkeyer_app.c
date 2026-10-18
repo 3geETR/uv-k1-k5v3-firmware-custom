@@ -48,12 +48,8 @@
 #include "../app_api.h"
 #include "cwkeyer_assets.h"
 
-#ifndef APP_VERSION
-#define APP_VERSION "dev"
-#endif
-
-#define CFG_MAGIC_V4       0xCAu   /* 0.2: crystal correction in centi-ppm */
-#define CFG_MAGIC          0xCBu   /* 0.4: crystal correction in REG_3B steps */
+#define CFG_MAGIC          0xCBu   /* 0.4: crystal correction in REG_3B steps;
+                                      0.2 used 0xCA, no longer converted */
 #define WPM_DEFAULT        18u
 #define WPM_MIN             5u
 #define WPM_MAX            60u
@@ -78,18 +74,29 @@
 #define PLL_LOCK_MS           2u
 #define MARK_MAX_MS      10000u
 #define SERVICE_MS          10u
-/* The bar is 7 px high, centred in the 17 free rows between the frequency
- * (down to y = 14) and the settings capsules (from y = 32): y = 20 to 26,
- * so it spans lines 2 and 3, shifted down by 4 bits. */
+/* The S-meter is the main-screen RSSI line (ui/main.c DisplayRSSIBar):
+ * dBm, S reading and 13 bars, 7 rows high. It is drawn on line 2, then
+ * moved down by 4 rows to sit in the 17 free rows between the frequency
+ * (down to y = 14) and the settings capsules (from y = 32): y = 20 to 26. */
 #define SMETER_LINE          2u
-#define SMETER_BARS         13u   /* S1-S9, then +10 to +40 dB */
-#define SMETER_S9_GAP        3u   /* extra columns between S9 and +10 dB */
-#define SMETER_X  ((128u - SMETER_BARS * 5u - SMETER_S9_GAP) / 2u)
+#define SMETER_MAX_LEVEL    13u   /* S1-S9, then S9+10 to S9+40 */
+#define SMETER_TEXT_X       38u
+#define SMETER_BAR_X        62u
+#define SMETER_DBM_MAX     -53    /* S9+40, as on the main screen */
+#define SMETER_DBM_START  -160    /* below the BK4829 floor: S0 */
+#define SMETER_FALL_DB       3    /* per update: one S unit every 200 ms */
 #define SMETER_EVERY_MS    100u
 #define BATTERY_MS         500u
 #define F_X                  72u
+#define TAG_LEFT_X            2u
+#define TAG_RIGHT_X          87u
+#define HELP_RIGHT_X         79u
 #define DEBOUNCE_POLLS        3u   /* straight key: ~3.5 ms of stable reading */
 
+_Static_assert(SMETER_BAR_X + SMETER_MAX_LEVEL * 5u <= 128u,
+               "CW S-meter bars exceed the display width");
+_Static_assert(SMETER_DBM_MAX + 93 == (SMETER_MAX_LEVEL - 9) * 10,
+               "CW S-meter dBm cap must end on the last bar");
 _Static_assert(1200u / WPM_MAX > 2u * RAMP_MS,
                "CW mark must remain longer than both RF ramps");
 
@@ -98,18 +105,11 @@ _Static_assert(1200u / WPM_MAX > 2u * RAMP_MS,
 #define REG_PA_BIAS        0x36u
 #define REG_FREQ_LOW       0x38u
 #define REG_FREQ_HIGH      0x39u
-#define REG_AUDIO_FILTER   0x3Du
 #define REG_AUDIO_GAIN     0x48u
 #define REG_SUBAUDIO       0x51u
-#define REG_AUDIO_1        0x54u
-#define REG_AUDIO_2        0x55u
 #define REG_AFC            0x73u
-#define REG_RX_FILTER_1    0x2Au
-#define REG_RX_FILTER_2    0x2Bu
-#define REG_RX_FILTER_3    0x2Fu
 #define REG_TONE           0x70u
 #define REG_TONE_FREQ      0x71u
-#define REG_RX_LEVEL       0x42u
 #define AF_ALAM              2u
 #define AF_USB               5u
 #define TX_LINK_OFF      0x0000u
@@ -150,20 +150,25 @@ typedef struct {
 
 _Static_assert(sizeof(config_t) <= 16u, "CW Keyer config exceeds overlay slot");
 
+/* Field order follows the Thumb-1 load/store immediate ranges: bytes first
+ * (offsets up to 31), then halfwords (up to 62), then words (up to 124). A
+ * field past its range costs an extra instruction at every access. */
 static struct {
     const app_api_t *A;
     bool running, txReady, keyDown, denied, fArm, redraw, statusRedraw;
-    bool uiHandled;
+    bool uiHandled, help;
     bool reverse, speaker, portOpen;
     uint8_t wpm, mode, port, uiCandidate, paBias, paControl;
     uint8_t padRaw, padStable, padPolls;
-    uint32_t moder, pupdr, apbenr1;   /* saved USB-port bits only */
-    uint32_t ticksPerMs, lastVal;
+    uint8_t smMs;
     int16_t calSteps, tuneOffset10Hz;
     uint16_t rxPitchHz, breakInMs, xtalBase;
     uint16_t serviceMs, batteryMs, markMs, hangElapsedMs;
-    uint8_t smLevel, smDecay, smMs;
+    uint32_t moder, pupdr, apbenr1;   /* saved USB-port bits only */
+    uint32_t ticksPerMs, lastVal;
+    int32_t smDbm;   /* held reading, capped at SMETER_DBM_MAX */
     uint32_t uiCandidateAt, navRepeatAt;
+    uint32_t exitTicks;   /* EXIT read for this long in the keyer waits */
 } g;
 
 #define A (g.A)
@@ -174,18 +179,13 @@ static char *text(char *buf, uint16_t offset)
     return buf;
 }
 
-static uint8_t slen(const char *s)
+/* Appends an asset text read straight into the output; returns its end,
+ * which is already NUL-terminated. Needs TEXT_MAX bytes free at out. */
+static char *putText(char *out, uint16_t offset)
 {
-    uint8_t n = 0u;
-    while (s[n])
-        n++;
-    return n;
-}
-
-static char *put(char *out, const char *s)
-{
-    while (*s)
-        *out++ = *s++;
+    A->asset_read(offset, out, TEXT_MAX);
+    while (*out)
+        out++;
     return out;
 }
 
@@ -197,38 +197,37 @@ static char *putu(char *out, uint32_t value)
     return A->append_u32(out, value);
 }
 
+/* The correction in ppm with two decimals, rounded half away from zero:
+ * |steps| x 0.1923. It stays below 10 ppm, so magnitude + 1000 prints as
+ * four digits, "1" then the units and the two decimals: the units digit
+ * moves over the "1" and the dot takes its place. */
+_Static_assert((CAL_MAX * 1923 + 50) / 100 < 1000 &&
+               (-(CAL_MIN) * 1923 + 50) / 100 < 1000,
+               "XTAL correction must stay below 10 ppm");
+
 static char *putCalibration(char *out)
 {
-    int16_t value = (int16_t)(uint32_t)A->idivmod(g.calSteps * 1923 + (g.calSteps < 0 ? -50 : 50), 100);
-    *out++ = value < 0 ? '-' : '+';
-    uint16_t magnitude = (uint16_t)(value < 0 ? -value : value);
-    const uint64_t qr = A->uidivmod(magnitude, 100u);
-    out = putu(out, (uint32_t)qr);
-    *out++ = '.';
-    uint8_t fraction = (uint8_t)(qr >> 32);
-    uint8_t tens = 0u;
-    while (fraction >= 10u) {
-        fraction -= 10u;
-        tens++;
-    }
-    *out++ = (char)('0' + tens);
-    *out++ = (char)('0' + fraction);
-    return out;
+    const int16_t steps = g.calSteps;
+    *out++ = steps < 0 ? '-' : '+';
+    const uint32_t magnitude = (uint32_t)A->uidivmod(
+        (uint32_t)(steps < 0 ? -steps : steps) * 1923u + 50u, 100u);
+    char *end = putu(out, magnitude + 1000u);
+    out[0] = out[1];
+    out[1] = '.';
+    return end;
 }
 
 /* The crystal correction is a signed count of BK4829 REG_3B steps (5 Hz on
  * the 26 MHz reference, 0.1923 ppm each). Positive means the radio's measured
  * carrier is high: the chip is told its crystal is faster, which lowers every
  * RX and TX frequency in proportion. The display shows it in ppm. */
+
+/* The VFO frequency moved by the UP/DOWN offset, in 10 Hz units. The
+ * offset stays within +/-TUNE_MAX_10HZ (50 kHz) and the VFO never goes below
+ * 18 MHz, so the sum can neither wrap below zero nor overflow. */
 static uint32_t tunedFrequency(uint32_t frequency)
 {
-    const int16_t offset = g.tuneOffset10Hz;
-    if (offset < 0) {
-        const uint16_t delta = (uint16_t)-offset;
-        return frequency > delta ? frequency - delta : 0u;
-    }
-    const uint16_t delta = (uint16_t)offset;
-    return frequency <= 0xFFFFFFFFu - delta ? frequency + delta : 0xFFFFFFFFu;
+    return frequency + (uint32_t)(int32_t)g.tuneOffset10Hz;
 }
 
 static void setAudioGain(uint16_t base, uint8_t gain)
@@ -262,13 +261,11 @@ static void configureCwRx(bool enableAudio)
     /* Use the BK4829 USB baseband output as a CW product detector. Tuning the
      * receiver below the carrier produces the configured receive tone. */
     a->bk_write(REG_AM_CTRL, a->bk_read(REG_AM_CTRL) & 0xFFFEu);
-    static const uint16_t rxProfile[][2] = {
-        { REG_RX_LEVEL, 0x6B5Au }, { REG_RX_FILTER_1, 0x7400u },
-        { REG_RX_FILTER_2, 0u }, { REG_RX_FILTER_3, 0x9890u },
-        { REG_AUDIO_1, 0x9009u }, { REG_AUDIO_2, 0x31A9u },
-        { REG_AUDIO_FILTER, 0u },
-    };
-    for (uint8_t i = 0u; i < 7u; i++)
+    /* The RX level, filter and audio register / value pairs (RX_PROFILE in
+     * gen_assets.py). */
+    uint16_t rxProfile[RX_PROFILE_LEN / 4u][2];
+    a->asset_read(RX_PROFILE, rxProfile, sizeof(rxProfile));
+    for (uint8_t i = 0u; i < RX_PROFILE_LEN / 4u; i++)
         a->bk_write((uint8_t)rxProfile[i][0], rxProfile[i][1]);
     a->bk_write(REG_AFC, a->bk_read(REG_AFC) | 0x0010u);
     a->set_agc(true);
@@ -309,18 +306,6 @@ static void returnToRx(void)
     g.statusRedraw = true;
 }
 
-static void formatFrequency(char *out)
-{
-    char *end = putu(out, tunedFrequency(A->tx_freq()));
-    uint8_t len = (uint8_t)(end - out);
-    *end = '\0';
-    if (len <= 5u)
-        return;
-    for (uint8_t i = (uint8_t)(len + 1u); i > len - 5u; i--)
-        out[i] = out[i - 1u];
-    out[len - 5u] = '.';
-}
-
 static uint16_t dotMs(void)
 {
     return (uint16_t)(uint32_t)A->uidivmod(1200u, g.wpm);
@@ -331,10 +316,12 @@ static bool isSide(uint8_t key)
     return key == KEY_SIDE1 || key == KEY_SIDE2;
 }
 
-static void drawConfigTag(const char *s, bool right, uint8_t line)
+/* A capsule of the two-column layouts, from x to the end of its column: the
+ * main screen's right column starts at TAG_RIGHT_X, the help page's wider
+ * one at HELP_RIGHT_X. */
+static void drawConfigTag(const char *s, uint8_t x, uint8_t line)
 {
-    A->print_inverse(s, right ? 87u : 2u, line, false, true,
-                     right ? 127u : 42u);
+    A->print_inverse(s, x, line, false, true, x < 64u ? 42u : 127u);
 }
 
 static void drawStatus(uint16_t title, uint8_t titleChars)
@@ -344,26 +331,20 @@ static void drawStatus(uint16_t title, uint8_t titleChars)
     char t[TEXT_MAX];
     a->print_inverse(text(t, title), 2u, 0u, true, true,
                      (uint8_t)(2u + titleChars * 4u));
-    a->print_tiny(APP_VERSION, 92u, 1u, true, false);
+    a->print_tiny(text(t, T_VERSION), 92u, 1u, true, false);
     a->draw_battery();
 }
 
+/* The main screen's big digits through the resident draw_frequency (API
+ * level 3), centred: with d digits, the big part, its dot and the small
+ * last two digits are (d - 2) x 13 + 17 = 13 d - 9 pixels wide. The
+ * digits are counted by formatting the frequency into s. At 1 GHz and
+ * above the service prints the whole frequency in the big text font. */
 static void drawBigFrequency(char *s)
 {
-    const app_api_t *const a = A;   /* one load: calls may change g */
-    formatFrequency(s);
-    const uint8_t n = slen(s);
-    if (n < 3u) {
-        a->print_normal(s, (uint8_t)((128u - n * 7u) >> 1), 127u, 1u);
-        return;
-    }
-    const uint8_t width = (uint8_t)((n - 3u) * 13u + 17u);
-    const uint8_t x = (uint8_t)((128u - width) >> 1);
-    char tail[3] = { s[n - 2u], s[n - 1u], '\0' };
-    s[n - 2u] = '\0';
-    a->display_freq(s, x, 0u, false);
-    /* End must stay zero as in APRS; a larger End re-centers the small tail. */
-    a->print_normal(tail, (uint8_t)(x + (n - 3u) * 13u + 3u), 0u, 1u);
+    const uint32_t frequency = tunedFrequency(A->tx_freq());
+    const uint32_t digits = (uint32_t)(putu(s, frequency) - s);
+    A->draw_frequency(frequency, (uint8_t)((137u - digits * 13u) >> 1), 0u);
 }
 
 static void drawMainStatus(void)
@@ -371,68 +352,95 @@ static void drawMainStatus(void)
     const app_api_t *const a = A;   /* one load: calls may change g */
     char t[TEXT_MAX];
     drawStatus(T_TITLE, T_TITLE_CHARS);
+    /* The label slot shows HELP on the help page (MENU disarms, so the
+     * transmitter is never ready there), TX OFF after a refusal, else RX. */
     if (g.denied || !g.txReady) {
-        text(t, g.denied ? T_DENIED : T_READY);
+        const bool help = g.help, denied = g.denied;
+        text(t, help ? T_HELP : denied ? T_DENIED : T_READY);
         a->print_inverse(t, 43u, 0u, true, true,
-                         (uint8_t)(43u + slen(t) * 4u));
+                         (uint8_t)(43u + (help ? T_HELP_LEN - 1u
+                                          : denied ? T_DENIED_LEN - 1u
+                                                   : T_READY_LEN - 1u) * 4u));
     }
+    /* F is never armed on the help page; it shows no speaker icon. */
     if (g.fArm)
         a->asset_read(BMP_F, a->status_line + F_X, BMP_F_LEN);
-    else if (g.speaker)
+    else if (g.speaker && !g.help)
         a->asset_read(BMP_SPEAKER, a->status_line + F_X, BMP_SPEAKER_LEN);
 }
 
-/* S-meter as the main screen draws it (ui/main.c DisplayRSSIBar): S9 at
- * -93 dBm, 6 dB per S-unit below it, one more bar per 10 dB above it. */
-static uint8_t smeterLevel(void)
+/* S-meter scale of the main screen: S9 at -93 dBm, 6 dB per S-unit below
+ * it, one more bar per 10 dB above it. The reading is capped at
+ * SMETER_DBM_MAX, so the level never exceeds SMETER_MAX_LEVEL. The
+ * divisions are multiply-shifts, exact on the ranges they see: x / 10 is
+ * (x * 13) >> 7 for x <= 40 (S9 to S9+40), x / 6 is (x * 43) >> 8 for
+ * x <= 53 (below S9). */
+static uint8_t smeterLevel(int dbm)
 {
-    const int16_t dbm = A->rssi_dbm();
-    uint8_t level = 0u;
-    int16_t v;
-    if (dbm >= -93) {
-        level = 9u;
-        for (v = (int16_t)(dbm + 93); v >= 10 && level < SMETER_BARS; v -= 10)
-            level++;
-    } else {
-        for (v = (int16_t)(dbm + 147); v >= 6; v -= 6)
-            level++;
-    }
-    return level;
+    if (dbm >= -93)
+        return (uint8_t)(9 + (((dbm + 93) * 13) >> 7));
+    const int x = dbm + 147;
+    return x > 0 ? (uint8_t)((x * 43) >> 8) : 0u;
 }
 
-/* Thirteen boxes of the same size, filled up to the level: the empty ones
- * keep the scale visible, and a wider gap after the ninth sets the
- * +10 to +40 dB boxes apart from S1-S9. */
+/* The main-screen RSSI line: "% 4d dBm" in the 3x5 font, then S0-S9 or
+ * +10 to +40, then 13 bars, hollow above S9. Line 2 is cleared and drawn,
+ * then its rows are split across lines 2 and 3 (4 rows down). */
 static void drawSmeter(void)
 {
-    uint8_t *p = A->fb[SMETER_LINE] + SMETER_X;       /* upper part, line 2 */
-    uint8_t *q = A->fb[SMETER_LINE + 1u] + SMETER_X;  /* lower part, line 3 */
-    for (uint8_t i = 0u; i < SMETER_BARS; i++) {
-        const bool lit = i < g.smLevel;
-        p[0] = p[3] = 0xF0u;                /* box edges: 0x7F << 4 */
-        q[0] = q[3] = 0x07u;
-        p[1] = p[2] = lit ? 0xF0u : 0x10u;  /* filled, or 0x41 << 4 */
-        q[1] = q[2] = lit ? 0x07u : 0x04u;
-        const uint8_t step = i == 8u ? 5u + SMETER_S9_GAP : 5u;   /* box 9 is S9 */
-        p += step;
-        q += step;
+    const app_api_t *const a = A;   /* one load: calls may change g */
+    uint8_t *p = a->fb[SMETER_LINE];
+    uint8_t *q = a->fb[SMETER_LINE + 1u];
+    for (uint8_t i = 0u; i < 128u; i++)
+        p[i] = 0u;
+
+    const int dbm = g.smDbm;
+    char s[TEXT_MAX + 5u];
+    char *out = s;
+    if (dbm > -100)
+        *out++ = ' ';
+    *out++ = '-';
+    text(putu(out, (uint32_t)-dbm), T_DBM);
+    a->print_tiny(s, 2u, SMETER_LINE * 8u + 1u, false, true);
+
+    const uint8_t level = smeterLevel(dbm);
+    out = s;
+    if (level <= 9u) {
+        *out++ = 'S';
+        *out++ = (char)('0' + level);
+    } else {
+        *out++ = '+';
+        out = putu(out, (uint32_t)(dbm + 93));
+    }
+    *out = '\0';
+    a->print_normal(s, SMETER_TEXT_X, 0u, SMETER_LINE);
+
+    for (uint8_t i = 0u; i < level; i++) {
+        uint8_t *bar = p + SMETER_BAR_X + i * 5u;
+        bar[0] = bar[3] = 0x3Eu;
+        bar[1] = bar[2] = i < 9u ? 0x3Eu : 0x22u;
+    }
+
+    for (uint8_t i = 0u; i < 128u; i++) {
+        q[i] = (uint8_t)(p[i] >> 4);
+        p[i] = (uint8_t)(p[i] << 4);
     }
 }
 
 /* Every SMETER_EVERY_MS while receiving. A CW signal comes and goes with each
- * element, so the bar holds its peak: it rises at once and falls one bar
- * every second update. Only the S-meter line goes to the display. */
+ * element, so the reading rises at once and falls by SMETER_FALL_DB per
+ * update. Only the two S-meter lines go to the display. */
 static void serviceSmeter(void)
 {
     const app_api_t *const a = A;   /* one load: calls may change g */
-    const uint8_t level = smeterLevel();
-    uint8_t shown = g.smLevel;
-    if (level >= shown)
-        shown = level;
-    else if ((g.smDecay ^= 1u) != 0u)
-        shown--;
-    if (shown != g.smLevel) {
-        g.smLevel = shown;
+    int dbm = a->rssi_dbm();
+    if (dbm > SMETER_DBM_MAX)
+        dbm = SMETER_DBM_MAX;
+    const int fall = g.smDbm - SMETER_FALL_DB;
+    if (dbm < fall)
+        dbm = fall;
+    if (dbm != g.smDbm) {
+        g.smDbm = dbm;
         drawSmeter();
         a->blit_line(SMETER_LINE);
         a->blit_line(SMETER_LINE + 1u);
@@ -441,43 +449,60 @@ static void serviceSmeter(void)
 
 static void drawMain(void)
 {
-    char s[24], right[24], t[TEXT_MAX];
+    /* Room for a port label followed by a TEXT_MAX asset read. */
+    char s[TEXT_MAX + 8u], right[TEXT_MAX + 8u];
     drawMainStatus();
 
     drawBigFrequency(s);
 
-    char *out = put(s, text(t, T_MODE + g.mode * T_MODE_STRIDE));
-    *out = '\0';
-    out = put(right, text(t, T_SPEED));
+    putText(s, T_MODE + g.mode * T_MODE_STRIDE);
+    char *out = putText(right, T_SPEED);
     out = putu(out, g.wpm);
     *out = '\0';
-    drawConfigTag(s, false, 4u);
-    drawConfigTag(right, true, 4u);
+    drawConfigTag(s, TAG_LEFT_X, 4u);
+    drawConfigTag(right, TAG_RIGHT_X, 4u);
 
-    out = put(s, text(t, T_RX_PITCH));
+    out = putText(s, T_RX_PITCH);
     out = putu(out, g.rxPitchHz);
     *out = '\0';
-    out = put(right, text(t, T_BREAKIN));
+    out = putText(right, T_BREAKIN);
     out = putu(out, g.breakInMs);
     *out = '\0';
-    drawConfigTag(s, false, 5u);
-    drawConfigTag(right, true, 5u);
+    drawConfigTag(s, TAG_LEFT_X, 5u);
+    drawConfigTag(right, TAG_RIGHT_X, 5u);
 
-    out = put(s, text(t, T_PORT + g.port * T_PORT_STRIDE));
-    out = put(out, g.reverse ? "DA-DI" : "DI-DA");
-    *out = '\0';
-    out = put(right, text(t, T_XTAL));
+    out = putText(s, T_PORT + g.port * T_PORT_STRIDE);
+    putText(out, (uint16_t)(T_ORDER + g.reverse * T_ORDER_STRIDE));
+    out = putText(right, T_XTAL);
     out = putCalibration(out);
     *out = '\0';
-    drawConfigTag(s, false, 6u);
+    drawConfigTag(s, TAG_LEFT_X, 6u);
     drawSmeter();
-    drawConfigTag(right, true, 6u);
+    drawConfigTag(right, TAG_RIGHT_X, 6u);
+}
+
+/* MENU: the keys in two columns of capsules, as on CW Decode. Keying is
+ * ignored while it is shown. */
+static void drawHelp(void)
+{
+    char t[TEXT_MAX];
+    drawMainStatus();
+    /* T_HELP_KEYS: the left column (lines 1 to 6), then the right one. */
+    for (uint8_t i = 0u; i < 12u; i++) {
+        if (text(t, T_HELP_KEYS + i * T_HELP_KEYS_STRIDE)[0])
+            drawConfigTag(t, i < 6u ? TAG_LEFT_X : HELP_RIGHT_X,
+                          (uint8_t)(i < 6u ? i + 1u : i - 5u));
+    }
+    A->print_tiny(text(t, T_HELP_STEP), 56u, 49u, false, true);
 }
 
 static void draw(void)
 {
     A->display_clear();
-    drawMain();
+    if (g.help)
+        drawHelp();
+    else
+        drawMain();
     A->blit_status();
     A->blit_full();
     g.redraw = false;
@@ -611,15 +636,10 @@ static uint8_t debounced(uint8_t p)
     return g.padStable;
 }
 
-static bool prepareTx(void)
+/* Called by keyOn once tx_state has allowed the transmission. */
+static void prepareTx(void)
 {
     const app_api_t *const a = A;   /* one load: calls may change g */
-    if (a->tx_state() != 0u) {
-        g.denied = true;
-        g.redraw = true;
-        return false;
-    }
-
     a->audio_path(false);
     a->tx_set_params();
     const uint16_t pa = a->bk_read(REG_PA_BIAS);
@@ -660,18 +680,22 @@ static bool prepareTx(void)
     g.txReady = true;
     g.denied = false;
     g.statusRedraw = true;
-    return true;
 }
 
+/* tx_state is asked before every mark: a refusal ends a prepared session,
+ * or leaves the receiver as it is when none was prepared. */
 static bool keyOn(void)
 {
-    if (g.txReady && A->tx_state() != 0u) {
-        returnToRx();
+    if (A->tx_state() != 0u) {
+        if (g.txReady)
+            returnToRx();
+        else
+            g.redraw = true;
         g.denied = true;
         return false;
     }
-    if (!g.txReady && !prepareTx())
-        return false;
+    if (!g.txReady)
+        prepareTx();
     sidetone(true);
     rampUp();
     g.keyDown = true;
@@ -716,8 +740,10 @@ static void serviceOneMs(void)
     if (++g.serviceMs >= SERVICE_MS) {
         g.serviceMs = 0u;
         a->backlight_update();
-        /* Receiving only: no RX while the carrier is up or during break-in. */
-        if (!g.txReady && (g.smMs = (uint8_t)(g.smMs + SERVICE_MS)) >= SMETER_EVERY_MS) {
+        /* Receiving only: no RX while the carrier is up or during break-in.
+         * The help page covers the S-meter lines. */
+        if (!g.txReady && !g.help &&
+            (g.smMs = (uint8_t)(g.smMs + SERVICE_MS)) >= SMETER_EVERY_MS) {
             g.smMs = 0u;
             serviceSmeter();
         }
@@ -736,18 +762,24 @@ static void serviceOneMs(void)
 }
 
 /* Element wait. The paddles are only looked at once the space is over (no
- * paddle memory); EXIT stays an immediate RF-safe abort. */
+ * paddle memory). EXIT aborts once it has been read for UI_DEBOUNCE_MS of
+ * waiting: while a SIDE contact bounces, the keypad scan can miss the zero
+ * column and report another key of the same row (SIDE1: MENU, UP, DOWN or
+ * EXIT; SIDE2: 1, 2, 3 or STAR), and a single such reading must not end
+ * the app. */
 static bool keyerWait(uint16_t ms)
 {
     uint32_t left = ms * g.ticksPerMs;
     ticksSince();
     for (;;) {
         const uint8_t key = A->get_key();
-        if (key == APP_KEY_EXIT) {
+        const uint32_t spent = ticksSince();
+        if (key != APP_KEY_EXIT) {
+            g.exitTicks = 0u;
+        } else if ((g.exitTicks += spent) >= UI_DEBOUNCE_MS * g.ticksPerMs) {
             g.running = false;
             return false;
         }
-        const uint32_t spent = ticksSince();
         if (spent >= left)
             return g.running;
         left -= spent;
@@ -761,6 +793,7 @@ static bool keyerWait(uint16_t ms)
 static void runPaddle(uint8_t p)
 {
     uint8_t last = 0u;
+    g.exitTicks = 0u;
     while (p) {
         const uint8_t el = p != (P_DIT | P_DAH) ? p : last == P_DIT ? P_DAH : P_DIT;
         if (!keyOn())
@@ -860,6 +893,14 @@ static void adjustSetting(uint8_t key, int8_t direction)
 
 static void handleUiKey(uint8_t key)
 {
+    if (g.help) {
+        if (key == APP_KEY_EXIT || key == APP_KEY_MENU) {
+            g.help = false;
+            g.redraw = true;
+        }
+        return;
+    }
+
     int8_t direction = A->nav_dir(key);
     if (direction != 0) {
         if (adjustFrequency(direction))
@@ -872,6 +913,12 @@ static void handleUiKey(uint8_t key)
     switch (key) {
         case APP_KEY_EXIT:
             g.running = false;
+            break;
+        case APP_KEY_MENU:
+            disarm();   /* ends a break-in hang: no keying behind the help */
+            g.fArm = false;
+            g.help = true;
+            g.redraw = true;
             break;
         case APP_KEY_F:
             g.fArm = !g.fArm;
@@ -927,13 +974,8 @@ static void loadConfig(void)
 {
     config_t cfg;
     A->cfg_load((uint8_t *)&cfg, sizeof(cfg));
-    if (cfg.magic == CFG_MAGIC_V4) {
-        /* 0.2 config: no port byte, correction in centi-ppm. */
-        cfg.port = PORT_SIDE;
-        cfg.calSteps = (int16_t)(uint32_t)A->idivmod(
-            cfg.calSteps * 100 + (cfg.calSteps < 0 ? -961 : 961), 1923);
-        cfg.magic = CFG_MAGIC;
-    }
+    /* Any other magic, including a 0.2 config (0xCA), starts from the
+     * defaults. */
     if (cfg.magic == CFG_MAGIC &&
         cfg.wpm >= WPM_MIN && cfg.wpm <= WPM_MAX &&
         cfg.mode <= MODE_PADDLE && cfg.port <= PORT_USB && cfg.reverse <= 1u) {
@@ -975,6 +1017,7 @@ void app_main(const app_api_t *api)
     g.running = true;
     g.redraw = true;
     g.statusRedraw = false;
+    g.smDbm = SMETER_DBM_START;
     resetUiInput();
     loadConfig();
     portSet(true);
@@ -1007,8 +1050,11 @@ void app_main(const app_api_t *api)
             g.statusRedraw = true;
         }
 
+        /* Keying is ignored while the help page is shown: PTT and the
+         * paddle contacts then only reach the help key handler. */
         const uint8_t pad = debounced(paddles(key));
-        const bool straight =
+        const bool keying = !g.help;
+        const bool straight = keying &&
             (key == APP_KEY_PTT || (g.mode == MODE_STRAIGHT && pad));
         if (straight) {
             resetUiInput();
@@ -1017,7 +1063,7 @@ void app_main(const app_api_t *api)
         } else if (g.keyDown) {
             keyOff();
             resetUiInput();
-        } else if (g.mode != MODE_STRAIGHT && pad) {
+        } else if (keying && g.mode != MODE_STRAIGHT && pad) {
             resetUiInput();
             A->backlight_on();
             runPaddle(pad);
