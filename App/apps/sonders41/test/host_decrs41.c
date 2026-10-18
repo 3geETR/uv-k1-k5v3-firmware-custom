@@ -17,9 +17,11 @@ static const uint8_t MASK[64] = {
     0x78,0x6E,0x3B,0xAE,0xBF,0x7B,0x4C,0xC1
 };
 
+/* atan(2^-i) in centi-arcseconds, as gen_assets.py writes them. */
 static const uint32_t ARC[RS41_ARC_N] = {
-    162000u, 95634u, 50530u, 25650u, 12875u, 6444u, 3223u,
-    1611u, 806u, 403u, 201u, 101u, 50u, 25u
+    16200000u, 9563418u, 5053048u, 2565006u, 1287480u, 644368u, 322263u,
+    161141u, 80572u, 40286u, 20143u, 10072u, 5036u, 2518u, 1259u, 629u,
+    315u, 157u, 79u, 39u, 20u, 10u, 5u, 2u
 };
 
 /* decrs41_init, then the tables the app reads from its assets. */
@@ -124,14 +126,14 @@ static void checkParse(void)
     assert(!strcmp(info.id, "S1234567"));
     assert((info.flags & (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT)) ==
            (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT));
-    assert(info.latS > 175500 && info.latS < 175900);
-    assert(info.lonS > 8100 && info.lonS < 8500);
-    assert(info.alt_m > 1150 && info.alt_m < 1250);
+    /* 48.8 N, 2.3 E, 1200 m: within 1" (31 m) and 5 m */
+    assert(info.latS > 17567900 && info.latS < 17568100);
+    assert(info.lonS > 827900 && info.lonS < 828100);
+    assert(info.alt_m >= 1195 && info.alt_m <= 1205);
     assert(info.vs_dm >= 51 && info.vs_dm <= 53);
     /* 8 m/s east, 3 m/s south: 8.5 m/s towards 110.6 degrees */
-    assert(info.hs_dm >= 84 && info.hs_dm <= 86);
+    assert(info.hs_ms >= 8 && info.hs_ms <= 9);
     assert(info.hdg >= 109 && info.hdg <= 112);
-    assert(info.sats == 8u);
     assert(info.batt_dv == 29u);
 
     initDec(&d);

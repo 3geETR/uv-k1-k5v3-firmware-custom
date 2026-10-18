@@ -36,7 +36,7 @@ enum { ST_SRCH = 0, ST_DATA = 1, ST_DONE = 2 };
 /* At most RS41_SYNC_ERR bits set in the 64 bits a:b. */
 static bool near64(uint32_t a, uint32_t b)
 {
-    uint8_t n = 0;
+    unsigned n = 0;
     while (a) { a &= a - 1u; if (++n > RS41_SYNC_ERR) return false; }
     while (b) { b &= b - 1u; if (++n > RS41_SYNC_ERR) return false; }
     return true;
@@ -75,21 +75,36 @@ static bool slBit(rs41sl_t *s, uint8_t bit)
 void decrs41_init(decrs41_t *d)
 {
     uint8_t *p = (uint8_t *)d;
-    for (uint16_t i = 0; i < sizeof *d; i++) p[i] = 0;
+    for (unsigned i = 0; i < sizeof *d; i++) p[i] = 0;
     d->dcQ8 = -1;
-    for (uint8_t k = 0; k < RS41_NSL; k++) d->sl[k].num = (uint8_t)(2u << k);
+    for (unsigned k = 0; k < RS41_NSL; k++) d->sl[k].num = (uint8_t)(2u << k);
 }
 
 void decrs41_rearm(decrs41_t *d)
 {
-    for (uint8_t k = 0; k < RS41_NSL; k++) slRearm(&d->sl[k]);
+    for (unsigned k = 0; k < RS41_NSL; k++) slRearm(&d->sl[k]);
 }
 
 bool decrs41_busy(const decrs41_t *d)
 {
-    for (uint8_t k = 0; k < RS41_NSL; k++)
+    for (unsigned k = 0; k < RS41_NSL; k++)
         if (d->sl[k].state == ST_DATA) return true;
     return false;
+}
+
+/* No slicer reading a frame, or each one inside the bytes the parser ignores,
+ * between the STATUS block (ends at 0x65) and the GPS block (starts at
+ * 0x112), 3 bytes of margin: a held sample costs one bit at most there. */
+#define HOLD_LO 0x68u
+#define HOLD_HI 0x10Fu
+bool decrs41_holdOk(const decrs41_t *d)
+{
+    for (unsigned k = 0; k < RS41_NSL; k++) {
+        const rs41sl_t *s = &d->sl[k];
+        if (s->state == ST_DATA && (unsigned)s->nbit - HOLD_LO * 8u >= (HOLD_HI - HOLD_LO) * 8u)
+            return false;
+    }
+    return true;
 }
 
 bool decrs41_push(decrs41_t *d, uint16_t sample)
@@ -102,7 +117,7 @@ bool decrs41_push(decrs41_t *d, uint16_t sample)
     a = y < 0 ? -y : y;
     if (a > d->amp) d->amp += (a - d->amp) >> 2;
     else d->amp -= d->amp >> AMP_DECAY;
-    for (uint8_t k = 0; k < RS41_NSL; k++) {
+    for (unsigned k = 0; k < RS41_NSL; k++) {
         rs41sl_t *s = &d->sl[k];
         int32_t t;
         uint8_t lev;
@@ -125,30 +140,29 @@ bool decrs41_push(decrs41_t *d, uint16_t sample)
     return done;
 }
 
-static uint16_t crc16(const uint8_t *p, uint8_t len)
+/* CRC-16/CCITT-FALSE in a word: bit 16 is the carry out, no uxth per bit. */
+static uint16_t crc16(const uint8_t *p, unsigned len)
 {
-    uint16_t crc = 0xFFFFu;
+    unsigned crc = 0xFFFFu;
     while (len--) {
-        crc ^= (uint16_t)*p++ << 8;
-        for (uint8_t b = 0; b < 8u; b++) {
-            bool high = (crc & 0x8000u) != 0u;
-            crc = (uint16_t)(crc << 1);
-            if (high) crc = (uint16_t)(crc ^ (uint16_t)0x1021u);
+        crc ^= (unsigned)*p++ << 8;
+        for (unsigned b = 0; b < 8u; b++) {
+            crc <<= 1;
+            if (crc & 0x10000u) crc ^= 0x11021u;
         }
     }
-    return crc;
+    return (uint16_t)crc;
 }
 
-static bool blockOk(const uint8_t *f, uint16_t pos, uint8_t id, uint8_t minLen)
+/* pos is one of the two fixed block offsets, both well inside the frame. */
+static bool blockOk(const uint8_t *f, unsigned pos, unsigned id, unsigned minLen)
 {
-    uint8_t len;
-    uint16_t end, got;
-    if (pos + 4u > RS41_FRAME_LEN || f[pos] != id) return false;
+    unsigned len, end;
+    if (f[pos] != id) return false;
     len = f[pos + 1u];
-    end = (uint16_t)(pos + 2u + len);
+    end = pos + 2u + len;
     if (len < minLen || end + 2u > RS41_FRAME_LEN) return false;
-    got = (uint16_t)(f[end] | ((uint16_t)f[end + 1u] << 8));
-    return crc16(f + pos + 2u, len) == got;
+    return crc16(f + pos + 2u, len) == (f[end] | ((unsigned)f[end + 1u] << 8));
 }
 
 static int32_t le32(const uint8_t *p)
@@ -174,38 +188,19 @@ static uint32_t isqrt32(uint32_t n)
     return root;
 }
 
-static uint64_t square32(int32_t v)
-{
-    uint32_t a = (uint32_t)v;
-    if (v < 0) a = 0u - a;
-    uint32_t lo = a & 0xFFFFu, hi = a >> 16;
-    return (uint64_t)(lo * lo) + ((uint64_t)(lo * hi) << 17) +
-           ((uint64_t)(hi * hi) << 32);
-}
-
-static uint32_t isqrt64(uint64_t n)
-{
-    uint64_t root = 0, bit = (uint64_t)1u << 62;
-    while (bit > n) bit >>= 2;
-    while (bit) {
-        if (n >= root + bit) { n -= root + bit; root = (root >> 1) + bit; }
-        else root >>= 1;
-        bit >>= 2;
-    }
-    return (uint32_t)root;
-}
-
-/* CORDIC atan2, result in arc-seconds; arc = atan(2^-i) (from the assets). */
+/* CORDIC atan2, result in centi-arcseconds (0.01", 0.3 m on the ground);
+ * arc = atan(2^-i) (from the assets). |x|, |y| up to 2^31 / 1.65 (the CORDIC
+ * gain): the positions in cm fit. */
 static int32_t atan2Arc(int32_t y, int32_t x, const uint32_t *arc)
 {
     int32_t angle = 0;
     if (!x && !y) return 0;
     if (x < 0) {
-        angle = y >= 0 ? 648000 : -648000;
+        angle = y >= 0 ? 64800000 : -64800000;
         x = -x;
         y = -y;
     }
-    for (uint8_t i = 0; i < RS41_ARC_N; i++) {
+    for (unsigned i = 0; i < RS41_ARC_N; i++) {
         int32_t ox = x;
         if (y > 0) {
             x += y >> i;
@@ -220,27 +215,47 @@ static int32_t atan2Arc(int32_t y, int32_t x, const uint32_t *arc)
     return angle;
 }
 
+/* Geodetic latitude = geocentric + atan(eps s c / (1 + eps s^2))
+ *                   = geocentric + eps z p / (p^2 + (1 + eps) z^2)
+ * with eps = w / (1 - w), w = e^2 N / (N + h): exact, the atan dropped (below
+ * 1e-8 rad). EPS_C0 - (h EPS_CM >> 16) is eps in centi-arcseconds per radian,
+ * linear in h at the mean N. The (1 + eps) z^2 term uses eps = 442 / 2^16. */
+#define EPS_C0 139012u
+#define EPS_CM 1424
+
 static bool ecef(const uint8_t *p, sonde_info_t *out, const uint32_t *arc)
 {
     int32_t x = le32(p), y = le32(p + 4), z = le32(p + 8);
     int32_t x100 = x / 10000, y100 = y / 10000, z100 = z / 10000;
-    uint32_t ax100 = (uint32_t)x100, ay100 = (uint32_t)y100;
-    uint32_t horizontal;
-    uint32_t radiusCm = isqrt64(square32(x) + square32(y) + square32(z));
-    uint32_t radiusM = radiusCm / 100u;
-    uint32_t q, corr;
+    uint32_t az100 = (uint32_t)(z100 < 0 ? -z100 : z100);
+    /* In 100 m every square and their sum fit a uint32 (the unsigned
+     * product squares a negative value as well). */
+    uint32_t h2 = (uint32_t)x100 * (uint32_t)x100 + (uint32_t)y100 * (uint32_t)y100;
+    uint32_t z2 = az100 * az100, r2 = h2 + z2;
+    uint32_t horizontal = isqrt32(h2), r100 = isqrt32(r2);
+    /* The radius and the distance to the polar axis to the centimetre,
+     * without 64-bit arithmetic: one Newton step from the 100 m roots, each
+     * position split as 10000 x100 + remainder (cm, same sign, so every term
+     * is positive), the squared remainders dropped (under 1 cm). */
+    uint32_t pxy = (uint32_t)(x100 * (x - x100 * 10000)) +
+                   (uint32_t)(y100 * (y - y100 * 10000));
+    uint32_t pr = pxy + (uint32_t)(z100 * (z - z100 * 10000));
+    uint32_t radiusM = r100 * 100u + (5000u * (r2 - r100 * r100) + pr) / (r100 * 100u);
+    int32_t pCm = (int32_t)(horizontal * 10000u +
+                            (5000u * (h2 - horizontal * horizontal) + pxy) / horizontal);
+    uint32_t q, s2, corr, d;
     int32_t alt;
-    if (x100 < 0) ax100 = 0u - ax100;
-    if (y100 < 0) ay100 = 0u - ay100;
-    horizontal = isqrt32(ax100 * ax100 + ay100 * ay100);
     if (radiusM < 6300000u || radiusM > 6450000u) return false;
-    q = ((uint32_t)(z100 < 0 ? -z100 : z100) << 15) / (radiusM / 100u);
-    corr = (21385u * q) >> 15;
-    corr = (corr * q) >> 15;
+    /* Ellipsoid radius at the geocentric latitude, to the second order:
+     * a - a e'^2/2 s^2 + 3 a e'^4/8 s^4 (s: its sine, Q15). */
+    q = (az100 << 15) / (radiusM / 100u);
+    s2 = (q * q) >> 15;
+    corr = (s2 * (21493u - ((108u * s2) >> 15))) >> 15;
     alt = (int32_t)radiusM - (int32_t)(6378137u - corr);
     if (alt < -1000 || alt > 50000) return false;
-    out->lonS = atan2Arc(y100, x100, arc);
-    out->latS = atan2Arc(z100, (int32_t)((horizontal * 9933u) / 10000u), arc);
+    out->lonS = atan2Arc(y, x, arc);
+    d = az100 * horizontal / ((r2 + (z2 >> 16) * 442u) / (EPS_C0 - (uint32_t)((alt * EPS_CM) >> 16)));
+    out->latS = atan2Arc(z, pCm, arc) + (z < 0 ? -(int32_t)d : (int32_t)d);
     out->alt_m = alt;
     /* ECEF velocity (cm/s) projected on the local vertical: x100.v is in
      * 100 m.cm/s, so dividing by the radius in 10 m gives dm/s. It fits an
@@ -248,29 +263,29 @@ static bool ecef(const uint8_t *p, sonde_info_t *out, const uint32_t *arc)
     int32_t vx = le16(p + 12), vy = le16(p + 14), vz = le16(p + 16);
     {
         int32_t dot = x100 * vx + y100 * vy + z100 * vz;
-        out->vs_dm = (int16_t)(dot / (int32_t)(radiusM / 10u));
+        out->vs_dm = (int16_t)(dot / (int32_t)(r100 * 10u));
     }
     /* The same velocity on the local east and north, without trigonometry:
-     * east = (-y, x, 0) / h, north = (-z x, -z y, h^2) / (r h), positions in
-     * km so every product fits an int32 (h: distance to the polar axis). */
-    out->hs_dm = 0;
+     * east = (-y, x, 0) / h, north = (-z x, -z y, h^2) / (r h). Only ratios
+     * of positions appear, so any scale works: 400 m (shifts, no division)
+     * keeps every product within an int32 (h: distance to the polar axis). */
+    out->hs_ms = 0;
     out->hdg = 0;
     {
-        int32_t x1k = x100 / 10, y1k = y100 / 10, z1k = z100 / 10;
-        int32_t h1k = (int32_t)(horizontal / 10u);
-        if (h1k) {
-            int32_t ve = (x1k * vy - y1k * vx) / h1k;                       /* cm/s */
-            int32_t vr = (x1k * vx + y1k * vy) / h1k;                       /* away from the axis */
-            int32_t vn = (h1k * vz - z1k * vr) / (int32_t)(radiusM / 1000u);
+        int32_t x4 = x100 >> 2, y4 = y100 >> 2, z4 = z100 >> 2;
+        int32_t h4 = (int32_t)(horizontal >> 2);
+        if (h4) {
+            int32_t ve = (x4 * vy - y4 * vx) / h4;                          /* cm/s */
+            int32_t vr = (x4 * vx + y4 * vy) / h4;                          /* away from the axis */
+            int32_t vn = (h4 * vz - z4 * vr) / (int32_t)(r100 >> 2);
             int32_t a = atan2Arc(ve, vn, arc);                              /* from north, east > 0 */
             /* int16 cm/s components: the sum of squares stays below 2^32 */
-            out->hs_dm = (uint16_t)((isqrt32((uint32_t)ve * (uint32_t)ve + (uint32_t)vn * (uint32_t)vn) + 5u) / 10u);
-            if (a < 0) a += 1296000;
-            a = (a + 1800) / 3600;
+            out->hs_ms = (uint16_t)((isqrt32((uint32_t)ve * (uint32_t)ve + (uint32_t)vn * (uint32_t)vn) + 50u) / 100u);
+            if (a < 0) a += 129600000;
+            a = (a + 180000) / 360000;
             out->hdg = (uint16_t)(a >= 360 ? 0 : a);
         }
     }
-    out->sats = p[18];
     return true;
 }
 
@@ -278,10 +293,10 @@ static bool ecef(const uint8_t *p, sonde_info_t *out, const uint32_t *arc)
 static bool frameOk(const decrs41_t *d, uint8_t *f, sonde_info_t *out)
 {
     const uint16_t statusPos = 0x39u, gpsPos = 0x112u;
-    for (uint16_t i = 8u; i < RS41_FRAME_LEN; i++) f[i] ^= d->mask[i & 63u];
+    for (unsigned i = 8u; i < RS41_FRAME_LEN; i++) f[i] ^= d->mask[i & 63u];
     if (!blockOk(f, statusPos, 0x79u, 40u)) return false;
-    for (uint8_t i = 0; i < 8u; i++) {
-        uint8_t c = f[statusPos + 4u + i];
+    for (unsigned i = 0; i < 8u; i++) {
+        unsigned c = f[statusPos + 4u + i];
         if (c < 0x20u || c > 0x7Eu) return false;
         out->id[i] = (char)c;
     }
@@ -295,7 +310,7 @@ static bool frameOk(const decrs41_t *d, uint8_t *f, sonde_info_t *out)
 
 bool decrs41_parse(decrs41_t *d, sonde_info_t *out)
 {
-    for (uint8_t k = 0; k < RS41_NSL; k++) {
+    for (unsigned k = 0; k < RS41_NSL; k++) {
         rs41sl_t *s = &d->sl[k];
         if (s->state != ST_DONE) continue;
         /* The other slicer is reading the same burst: drop it on success. */

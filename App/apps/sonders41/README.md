@@ -8,7 +8,7 @@ battery voltage.
 
 ## Status
 
-Version 0.3 implements the common 320-byte RS41 frame at 4800 bit/s. The
+Version 0.4 implements the common 320-byte RS41 frame at 4800 bit/s. The
 parser, CRC path, normal RF polarity, and inverted RF polarity have synthetic
 host tests, and `test/model_rx.py` runs the demodulator through a model of the
 radio's RAW audio path. Reception on a UV-K1 or UV-K5 V3 has been validated
@@ -23,7 +23,9 @@ To fit the 4 KiB overlay, this first version deliberately does not implement:
 
 Consequently, a clean signal is required. A valid STATUS block is mandatory;
 an invalid GPS block still counts as a received frame but shows no position.
-Each valid received frame triggers two short flashes of the green LED.
+Each valid received frame triggers two short flashes of the green LED. When
+enabled with key `5`, it also triggers one short decode beep; the Foxhunt signal
+icon in the status bar indicates that the beep is active.
 
 ## Radio setup
 
@@ -60,6 +62,7 @@ false sync.
 | `2` / `F`+`2` | Tune +5 / -5 kHz, up to +/-50 kHz |
 | `3` / `F`+`3` | Cycle attenuation forward / backward |
 | `4` | Restore the VFO frequency |
+| `5` | Decode beep on/off, saved on exit |
 | `EXIT` | Quit |
 
 ## Supported frame
@@ -70,16 +73,22 @@ false sync.
 - common 320-byte frame;
 - CRC-16/CCITT-FALSE STATUS (`0x79`) and GPS (`0x7B`) sub-blocks;
 - eight-character sonde serial number;
-- GPS ECEF position converted to latitude, longitude, and altitude;
+- GPS ECEF position converted to WGS84 latitude, longitude, and height above
+  the ellipsoid, in 32-bit integers: within about 3 m horizontally and 4 m in
+  height of an exact conversion (median 0.5 m and 1.3 m, checked over random
+  positions);
 - GPS ECEF velocity projected on the local vertical (`VS`, m/s, positive
-  while climbing) and the number of satellites used (`SAT`);
+  while climbing);
 - the same velocity projected on the local east and north, in integers
   without trigonometry: horizontal speed (`HS`, whole m/s) and heading
   (`HDG`, degrees from north);
 - battery voltage, STATUS byte `0x45` in 0.1 V (as `rs41mod`).
 
-Screen body, four rows: the position (4 decimals, about 11 m, so it always
-fits one row), `ALT …m VS±…`, `SAT n BAT …V`, `HS …m/s HDG …`.
+Screen body, four fixed rows: the position (4 decimals, about 11 m, so it
+always fits one row), `ALT …m VS±…`, `HS …m/s HDG …`, `BAT …V`.
+
+Rows 2 to 4 hold the same kind of data in every sonde app (M10, M20, RS41);
+a missing field leaves its row blank.
 
 ## Build
 
@@ -112,4 +121,4 @@ Use only a frequency permitted by the Flipper's configured region.
 
 ## Version
 
-Current: **v0.3**.
+Current: **v0.4**.

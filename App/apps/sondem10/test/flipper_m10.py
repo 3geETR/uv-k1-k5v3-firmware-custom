@@ -48,6 +48,9 @@ def test_frame():
     frame[0x1D] = 0
     frame[0x3E] = 0
     frame[0x3F:0x41] = (0xA599).to_bytes(2, "little")  # About 20 C.
+    # Humidity counts, 55 %RH reference then sensor: ratio 0.9855, 45 %RH.
+    frame[0x32:0x35] = (1000000).to_bytes(3, "little")
+    frame[0x35:0x38] = (985500).to_bytes(3, "little")
     frame[0x5D] = 0x0B
     frame[0x5F] = 0xA5
     serial = (1 << 13) | 1234
@@ -113,7 +116,7 @@ def test_cases():
     bad_crc[0x0E] ^= 1
     chips = frame_chips(valid)
     return {
-        "valid": (chips, "A05-B-11234, 48.8000N 2.3000E, ALT 1200m VS+5.2, T 20.0C, "
+        "valid": (chips, "A05-B-11234, 48.8000N 2.3000E, ALT 1200m VS+5.2, T 20.0C RH 45%, "
                            "HS 9m/s HDG 111"),
         "inverted": ([1 ^ chip for chip in chips], "same frame, inverted RF polarity"),
         "badcrc": (frame_chips(bad_crc), "rejected: FRAME must not increment"),

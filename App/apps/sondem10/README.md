@@ -2,19 +2,18 @@
 
 Receive-only overlay application for standard Meteomodem M10 radiosondes. It
 samples the BK4829 AF output on PA4, validates the M10 checksum, and displays
-the serial number, GPS position, altitude, outside temperature, vertical
-speed, horizontal speed, and heading.
+the serial number, GPS position, altitude, outside temperature, relative
+humidity, vertical speed, horizontal speed, and heading.
 
 ## Status
 
-Version 0.3 implements the standard M10 `0x9F` telemetry frame, outside
-temperature conversion, and the GPS velocity. The parser and soft-input path have a synthetic host
+Version 0.5 implements the standard M10 `0x9F` telemetry frame, outside
+temperature and humidity conversion, and the GPS velocity. The parser and soft-input path have a synthetic host
 test. Live reception has also been validated in the field with an operational
 M10 radiosonde transmitted from Trappes, France.
 
 Not implemented yet:
 
-- M10 humidity conversion;
 - M10+ `0xAF` frames;
 - periodic `0x49` satellite-level frames.
 
@@ -44,6 +43,7 @@ samples per chip. The decoder DPLL tracks this small difference.
 | `2` / `F`+`2` | Tune +5 / -5 kHz, up to +/-50 kHz |
 | `3` / `F`+`3` | Cycle attenuation forward / backward |
 | `4` | Restore the VFO frequency |
+| `5` | Decode beep on/off, saved on exit |
 | `EXIT` | Quit |
 
 ## Supported frame
@@ -59,15 +59,25 @@ samples per chip. The decoder DPLL tracks this small difference.
 - GPS velocity east / north / up at `0x04` / `0x06` / `0x08` (big-endian
   int16, 1/200 m/s, as `m10mod`): vertical speed (`VS`), horizontal speed
   (`HS`, whole m/s) and heading (`HDG`, degrees from north, a table-free
-  `atan` within 0.3 degree), with a valid GPS fix.
+  `atan` within 0.3 degree), with a valid GPS fix;
+- relative humidity from the capacitive sensor, as `m10mod`: the ratio of its
+  555 timer count (24-bit LE at `0x35`) to the 55 %RH reference count
+  (`0x32`), RH = (ratio - 0.8955) / 0.002, plus `m10mod`'s corrections below
+  0 C and -30 C from the outside temperature, clamped to 0..100 %, in integers
+  (within 0.8 %RH of `m10mod`'s floating point, rounding included).
 
-Screen body, four rows: the position (4 decimals, about 11 m, so it always
-fits one row), `ALT …m VS±…`, `T …C`, `HS …m/s HDG …`.
+Screen body, four fixed rows: the position (4 decimals, about 11 m, so it
+always fits one row), `ALT …m VS±…`, `HS …m/s HDG …`, `T …C RH …%`.
+
+Rows 2 to 4 hold the same kind of data in every sonde app (M10, M20, RS41);
+a missing field leaves its row blank.
 
 Frames with an invalid GPS fix still count as valid received frames and show
 their serial number, but no position is displayed.
 
-Each valid received frame triggers two short flashes of the green LED.
+Each valid received frame triggers two short flashes of the green LED. When
+enabled with key `5`, it also triggers one short decode beep; the Foxhunt signal
+icon in the status bar indicates that the beep is active.
 
 ## Build
 
@@ -100,4 +110,4 @@ Use only a frequency permitted by the Flipper's configured region.
 
 ## Version
 
-Current: **v0.3**.
+Current: **v0.5**.

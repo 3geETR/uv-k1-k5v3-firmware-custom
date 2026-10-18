@@ -135,7 +135,7 @@ def test_cases():
     bits = wire_bits(valid)
     return {
         "valid": (bits, "S1234567, 48.8000N 2.3000E, ALT about 1200m VS+5.2, "
-                           "SAT 8 BAT 2.9V, HS 9m/s HDG 110 or 111"),
+                           "BAT 2.9V, HS 9m/s HDG 110 or 111"),
         "inverted": ([1 ^ bit for bit in bits], "same frame, inverted RF polarity"),
         "badcrc": (wire_bits(bad_crc), "rejected: FRAME must not increment"),
     }

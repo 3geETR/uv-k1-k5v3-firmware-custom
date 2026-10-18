@@ -15,24 +15,25 @@ enum { ST_SRCH = 0, ST_DATA = 1, ST_DONE = 2 };
 
 #define RAW_HDR 0x99994C99u
 
-static uint16_t checkM10(const uint8_t *msg, uint8_t len)
+/* Words throughout, the byte ranges kept by masks: no uxtb per step. */
+static uint16_t checkM10(const uint8_t *msg, unsigned len)
 {
-    uint16_t c = 0;
-    for (uint8_t i = 0; i < len; i++) {
-        uint8_t b = msg[i];
-        b = (uint8_t)((b >> 1) | (b << 7));
-        b ^= (uint8_t)((b >> 2) & 0xFFu);
-        uint8_t t6 = (uint8_t)((c ^ (c >> 2) ^ (c >> 4)) & 1u);
-        uint8_t t7 = (uint8_t)(((c >> 1) ^ (c >> 3) ^ (c >> 5)) & 1u);
-        uint8_t t = (uint8_t)((c & 0x3Fu) | (t6 << 6) | (t7 << 7));
-        uint8_t s = (uint8_t)((c >> 7) & 0xFFu);
-        s ^= (uint8_t)((s >> 2) & 0xFFu);
-        c = (uint16_t)(((c & 0xFFu) << 8) | (uint8_t)(b ^ t ^ s));
+    unsigned c = 0;
+    for (unsigned i = 0; i < len; i++) {
+        unsigned b = msg[i];
+        b = ((b >> 1) | (b << 7)) & 0xFFu;
+        b ^= b >> 2;
+        unsigned t6 = (c ^ (c >> 2) ^ (c >> 4)) & 1u;
+        unsigned t7 = ((c >> 1) ^ (c >> 3) ^ (c >> 5)) & 1u;
+        unsigned t = (c & 0x3Fu) | (t6 << 6) | (t7 << 7);
+        unsigned s = (c >> 7) & 0xFFu;
+        s ^= s >> 2;
+        c = ((c & 0xFFu) << 8) | (b ^ t ^ s);
     }
-    return c;
+    return (uint16_t)c;
 }
 
-static uint32_t be(const uint8_t *p, uint8_t n)
+static uint32_t be(const uint8_t *p, unsigned n)
 {
     uint32_t v = 0;
     while (n--) v = (v << 8) | *p++;
@@ -53,13 +54,14 @@ static uint32_t mulHi32(uint32_t a, uint32_t b)
     return ah * bh + high + (t >> 16);
 }
 
-static int32_t binaryAngleToArcSec(const uint8_t *p)
+/* 2^32 per turn to centi-arcseconds (129600000 per turn, 0.3 m). */
+static int32_t binaryAngleToCas(const uint8_t *p)
 {
     int32_t v = (int32_t)be(p, 4);
     uint32_t neg = v < 0;
     uint32_t u = (uint32_t)v;
     if (neg) u = 0u - u;
-    uint32_t arc = mulHi32(u, 1296000u);
+    uint32_t arc = mulHi32(u, 129600000u);
     return neg ? -(int32_t)arc : (int32_t)arc;
 }
 
@@ -71,12 +73,12 @@ static int16_t softOf(int32_t integ)
     return (int16_t)v;
 }
 
-static bool hdrOk(const int16_t *ch, uint8_t base)
+static bool hdrOk(const int16_t *ch, unsigned base)
 {
     int32_t s = 0;
     uint32_t e = 0;
-    for (uint8_t i = 0; i < 32u; i++) {
-        int32_t c = ch[(uint8_t)(base + i) & CHIP_MSK];
+    for (unsigned i = 0; i < 32u; i++) {
+        int32_t c = ch[(base + i) & CHIP_MSK];
         e += (uint32_t)(c >= 0 ? c : -c);
         if ((RAW_HDR >> (31u - i)) & 1u) s += c;
         else s -= c;
@@ -85,13 +87,13 @@ static bool hdrOk(const int16_t *ch, uint8_t base)
     return e > 120u && (uint32_t)s * 5u > e * 3u;
 }
 
-static uint16_t softWord(const int16_t *ch, uint8_t base, uint8_t *prev_out)
+static uint16_t softWord(const int16_t *ch, unsigned base, uint8_t *prev_out)
 {
     uint16_t w = 0;
     uint8_t prev = 0;
-    for (uint8_t i = 0; i < 16u; i++) {
-        int32_t s1 = ch[(uint8_t)(base + i * 2u) & CHIP_MSK];
-        int32_t s2 = ch[(uint8_t)(base + i * 2u + 1u) & CHIP_MSK];
+    for (unsigned i = 0; i < 16u; i++) {
+        int32_t s1 = ch[(base + i * 2u) & CHIP_MSK];
+        int32_t s2 = ch[(base + i * 2u + 1u) & CHIP_MSK];
         uint8_t man = (s2 >= s1) ? 1u : 0u;
         w = (uint16_t)((w << 1) | (prev == man ? 1u : 0u));
         prev = man;
@@ -155,7 +157,7 @@ static void emitChip(decm10_t *d, int16_t soft)
 void decm10_init(decm10_t *d)
 {
     uint8_t *p = (uint8_t *)d;
-    for (uint16_t i = 0; i < sizeof *d; i++) p[i] = 0;
+    for (unsigned i = 0; i < sizeof *d; i++) p[i] = 0;
     d->meanQ8 = -1;
     d->ph = SPB_Q8 / 2;
 }
@@ -275,10 +277,24 @@ bool decm10_parse(decm10_t *d, sonde_info_t *out)
         else
             out->tRaw = 0;
     }
+    /* Humidity (m10mod get_RH): the capacitive sensor's 555 period over the
+     * 55 %RH reference's, both 24-bit LE at 0x35 and 0x32; RH = (ratio -
+     * 0.8955) / 0.002, here in 0.1 % before the temperature terms (the app's).
+     * Both counts scaled down to 17 bits, the ratio in Q15 with one division:
+     * within 0.1 %RH of the exact quotient. */
+    {
+        uint32_t c55 = f[0x32u] | ((uint32_t)f[0x33u] << 8) | ((uint32_t)f[0x34u] << 16);
+        uint32_t cRH = f[0x35u] | ((uint32_t)f[0x36u] << 8) | ((uint32_t)f[0x37u] << 16);
+        while (cRH > 0x1FFFFu) { cRH >>= 1; c55 >>= 1; }
+        if (c55) {
+            out->rh10 = (int16_t)((int32_t)((((cRH << 15) / c55) * 5000u) >> 15) - 4477);
+            out->flags |= SONDE_HAS_RH;
+        }
+    }
     if (f[2] != 0x20u || (f[0x1Du] & 1u)) return true;
 
-    out->latS = binaryAngleToArcSec(f + 0x0Eu);
-    out->lonS = binaryAngleToArcSec(f + 0x12u);
+    out->latS = binaryAngleToCas(f + 0x0Eu);
+    out->lonS = binaryAngleToCas(f + 0x12u);
     alt = (int32_t)be(f + 0x16u, 4);
     out->alt_m = alt / 1000;
     out->flags |= SONDE_HAS_ALT;
@@ -288,8 +304,8 @@ bool decm10_parse(decm10_t *d, sonde_info_t *out)
     {
         int32_t ve = (int16_t)be(f + 0x04u, 2), vn = (int16_t)be(f + 0x06u, 2);
         out->vs_dm = (int16_t)((int16_t)be(f + 0x08u, 2) / 20);
-        out->hs_dm = (uint16_t)((isqrt32((uint32_t)ve * (uint32_t)ve +
-                                         (uint32_t)vn * (uint32_t)vn) + 10u) / 20u);
+        out->hs_ms = (uint16_t)((isqrt32((uint32_t)ve * (uint32_t)ve +
+                                         (uint32_t)vn * (uint32_t)vn) + 100u) / 200u);
         out->hdg = bearing(ve, vn);
         out->flags |= SONDE_HAS_VEL;
     }

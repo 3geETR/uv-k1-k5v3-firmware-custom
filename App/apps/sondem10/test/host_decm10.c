@@ -76,6 +76,9 @@ static void build_frame(uint8_t *f)
     f[0x1D] = 0;                   /* Valid 3D fix. */
     f[0x3E] = 0;                   /* Thermistor range. */
     f[0x3F] = 0x99; f[0x40] = 0xA5; /* About 20 C. */
+    /* 55 %RH reference 1000000, sensor 985500: ratio 0.9855, 45.0 %RH */
+    f[0x32] = 0x40; f[0x33] = 0x42; f[0x34] = 0x0F;
+    f[0x35] = 0x9C; f[0x36] = 0x09; f[0x37] = 0x0F;
     f[0x5D] = 0x0B;
     f[0x5F] = 0xA5;
     f[0x60] = 0xD2; f[0x61] = 0x24;
@@ -88,18 +91,20 @@ static void build_frame(uint8_t *f)
 
 static int fields_ok(const sonde_info_t *out)
 {
-    int32_t lat_err = out->latS - 175680;
-    int32_t lon_err = out->lonS - 8280;
+    /* centi-arcseconds: 48.8 N, 2.3 E */
+    int32_t lat_err = out->latS - 17568000;
+    int32_t lon_err = out->lonS - 828000;
     if (lat_err < 0) lat_err = -lat_err;
     if (lon_err < 0) lon_err = -lon_err;
     return strcmp(out->id, "A05-B-11234") == 0 &&
            (out->flags & (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT)) ==
                (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT) &&
            out->tRaw == 0x0599u && out->alt_m == 1200 &&
+           (out->flags & SONDE_HAS_RH) && out->rh10 == 450 &&
            lat_err <= 1 && lon_err <= 1 &&
            /* 8.5 m/s towards 110.6 degrees, climbing 5.2 m/s */
            (out->flags & SONDE_HAS_VEL) && out->vs_dm == 52 &&
-           out->hs_dm == 85 && out->hdg == 111;
+           out->hs_ms == 9 && out->hdg == 111;
 }
 
 int main(void)

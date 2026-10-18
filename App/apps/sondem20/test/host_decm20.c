@@ -89,8 +89,10 @@ static void build_frame(uint8_t *f)
         f[0x14] = (uint8_t)(sn24 >> 16);
     }
     f[0x15] = 7;
-    f[0x16] = 0;                    /* pressure LSB (used if fw>=7) */
-    f[0x24] = 0x00; f[0x25] = 0x10; /* → ~16 hPa raw /4096 → check HAS_PRESS */
+    /* Humidity: humval 30000, rh_cal 32389, RH NTC ADC 447 (20 C): 45 %RH */
+    f[0x02] = 0x30; f[0x03] = 0x75;
+    f[0x2F] = 0x85; f[0x30] = 0x7E;
+    f[0x06] = 0xBF; f[0x07] = 0x01;
     put_be32(f + 0x1C, 48800000);   /* 48.8 N */
     put_be32(f + 0x20, 2300000);    /* 2.3 E */
     f[0x43] = 7;                    /* fwVer at flen-2 */
@@ -126,15 +128,19 @@ int main(void)
             fprintf(stderr, "parse: pos/alt flags=%u alt=%ld\n",
                     out.flags, (long)out.alt_m);
             fail++;
-        } else if (out.latS != 175680 || out.lonS != 8280) {
+        } else if (!(out.flags & SONDE_HAS_RH) || out.rhQ11 != 13601 || out.tuRaw != 447) {
+            fprintf(stderr, "parse: rh flags=%u q=%u tu=%u\n",
+                    out.flags, out.rhQ11, out.tuRaw);
+            fail++;
+        } else if (out.latS != 17568000 || out.lonS != 828000) {   /* centi-arcseconds */
             fprintf(stderr, "parse: lat=%ld lon=%ld\n",
                     (long)out.latS, (long)out.lonS);
             fail++;
         } else if (!(out.flags & SONDE_HAS_VEL) || out.vs_dm != 52 ||
-                   out.hs_dm != 85 || out.hdg != 111) {
+                   out.hs_ms != 9 || out.hdg != 111) {
             /* 8.5 m/s towards 110.6 degrees, climbing 5.2 m/s */
             fprintf(stderr, "parse: vs=%d hs=%u hdg=%u\n",
-                    out.vs_dm, out.hs_dm, out.hdg);
+                    out.vs_dm, out.hs_ms, out.hdg);
             fail++;
         } else
             printf("  ✅ parse fields\n");

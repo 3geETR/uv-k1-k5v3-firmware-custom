@@ -9,11 +9,6 @@
 #include "sonde_info.h"
 #include "decm10.c"
 
-static const app_api_t *Gdiv;
-uint64_t __aeabi_uidivmod(uint32_t n, uint32_t d){ return Gdiv->uidivmod(n, d); }
-uint64_t __aeabi_uidiv(uint32_t n, uint32_t d) __attribute__((alias("__aeabi_uidivmod")));
-uint64_t __aeabi_idivmod(int32_t n, int32_t d){ return Gdiv->idivmod(n, d); }
-uint64_t __aeabi_idiv(int32_t n, int32_t d) __attribute__((alias("__aeabi_idivmod")));
 void *memcpy(void *d, const void *s, size_t n)
 {
     uint8_t *D = d; const uint8_t *S = s;
@@ -26,7 +21,6 @@ void *memcpy(void *d, const void *s, size_t n)
 #define CYC_PER_SAMPLE (48000000u / FS)
 #define REG_2B 0x2B
 #define REG_73 0x73
-#define REG_30 0x30
 #define REG_43 0x43
 /* Preserve the proven M20 wide receive profile for the near-identical M10 signal. */
 #define REG_43_M10 0x7E2Cu
@@ -37,41 +31,60 @@ void *memcpy(void *d, const void *s, size_t n)
 #define REG_39 0x39
 #define STEP_10HZ 500
 #define OFF_MAX 10
-#define KEY_IDLE_EVERY 4800u
-#define KEY_ARMED_EVERY 960u
-#define ARMED_REFRESH_SLOTS 5u
+/* Keys: a poll every 40 ms catches any press; a poll alone holds the last
+ * sample over its ~0.2 ms (no redraw, no rearm). A held sample may flip a
+ * header bit, so while frames come (once a second) no poll falls in
+ * GUARD_LO .. + GUARD_W after the last one, around the next header. Redraw
+ * on a frame or a key, and every 240 ms (RSSI) only without a frame for 2 s. */
+#define KEY_EVERY 768u
+#define REFRESH_POLLS 6u
+#define TRACK_CYC (2000u * 48000u)
+#define GUARD_LO (780u * 48000u)
+#define GUARD_W (80u * 48000u)
 #define LED_STEP (FS / 10u)
 #define CFG_MAGIC 0x10u
+#define BEEP_X 47u
 #define SPK_X 59u
+#define BEEP_HZ 1536u
+#define BEEP_MS 80u
 #define BK_REG_13 0x13
 #define ATT_SETTLE 40
 
-typedef struct { uint8_t spk, att; } app_cfg_t;
+typedef struct { bool spk; uint8_t att, beep; } app_cfg_t;
 
+/* Words, then bytes, then halfwords, the frame last: every byte field stays
+ * within ldrb's 0..31 immediate offsets. offSteps is a word: Thumb-1 has no
+ * ldrsb with an immediate offset. */
 static struct {
     const app_api_t *A;
-    sonde_info_t info;
     uint32_t vfoFreq;
-    uint8_t prevKey, line;
+    int32_t offSteps;
+    uint32_t tFrame;          /* cycles_48mhz at the last decoded frame */
+    uint8_t prevKey, led;
+    bool fArm, track;
     app_cfg_t cfg;
-    int8_t offSteps;
-    bool running, fArm;
     int16_t rssi;
     uint16_t nOk, ledCnt;
-    uint8_t led;
+    sonde_info_t info;
 } g;
 
+uint64_t __aeabi_uidivmod(uint32_t n, uint32_t d){ return g.A->uidivmod(n, d); }
+uint64_t __aeabi_uidiv(uint32_t n, uint32_t d) __attribute__((alias("__aeabi_uidivmod")));
+uint64_t __aeabi_idivmod(int32_t n, int32_t d){ return g.A->idivmod(n, d); }
+uint64_t __aeabi_idiv(int32_t n, int32_t d) __attribute__((alias("__aeabi_idivmod")));
+
 static char *put(char *o, const char *s){ while (*s) *o++ = *s++; return o; }
-static uint8_t subu(uint32_t *v, uint32_t d){ uint8_t q = 0; while (*v >= d) { *v -= d; q++; } return q; }
+static unsigned subu(uint32_t *v, uint32_t d){ unsigned q = 0; while (*v >= d) { *v -= d; q++; } return q; }
 /* The resident formatter (API level 3). One local stub keeps every call a
  * plain bl: the service lies past the ldr immediate range of the table. */
 __attribute__((noinline))
 static char *puti(char *o, int32_t v){ return g.A->append_i32(o, v); }
+/* "48.8000N" from centi-arcseconds (360000 per degree), rounded to 0.0001 deg. */
 static char *putPos(char *o, int32_t s, char pos, char neg)
 {
-    uint32_t a = (uint32_t)(s < 0 ? -s : s);
-    o = puti(o, subu(&a, 3600u)); *o++ = '.';
-    for (uint8_t k = 0; k < 4u; k++) { a *= 10u; *o++ = (char)('0' + subu(&a, 3600u)); }
+    uint32_t a = (uint32_t)(s < 0 ? -s : s) + 18u;
+    o = puti(o, subu(&a, 360000u)); *o++ = '.';
+    for (unsigned k = 0; k < 4u; k++) { a *= 10u; *o++ = (char)('0' + subu(&a, 360000u)); }
     *o++ = s < 0 ? neg : pos;
     return o;
 }
@@ -102,13 +115,27 @@ static char *putVs(char *o, int32_t v)
 static void tiny(char *buf, uint8_t x, uint8_t y, char *end)
 { *end = '\0'; g.A->print_tiny(buf, x, y, false, true); }
 
+/* RX audio: the wide AF select and the speaker as configured. Shared by the
+ * start-up, key 1, tune() and the decode beep (tones_off_rx mutes the AF). */
+__attribute__((noinline))
+static void rxAudio(void)
+{
+    g.A->bk_write(REG_47, REG_47_M10);
+    g.A->audio_path(g.cfg.spk);
+}
 static void tune(void)
 {
-    uint32_t f = (uint32_t)((int32_t)g.vfoFreq + (int32_t)g.offSteps * STEP_10HZ);
+    uint32_t f = (uint32_t)((int32_t)g.vfoFreq + g.offSteps * STEP_10HZ);
     g.A->bk_write(REG_38, (uint16_t)(f & 0xFFFFu));
     g.A->bk_write(REG_39, (uint16_t)(f >> 16));
-    uint16_t r30 = g.A->bk_read(REG_30);
-    g.A->bk_write(REG_30, 0); g.A->bk_write(REG_30, r30);
+    g.A->tones_off_rx();         /* REG_30 to 0 then RX: VCO recalibration, relock */
+    rxAudio();
+}
+static void decodeBeep(void)
+{
+    g.A->play_tone(BEEP_HZ, BEEP_MS);
+    g.A->tones_off_rx();
+    rxAudio();
 }
 static void applyAtt(void)
 {
@@ -117,18 +144,20 @@ static void applyAtt(void)
     g.A->bk_write(BK_REG_13, (uint16_t)((reg & ~0x03FFu) | gain));
     g.A->set_agc(false);
 }
-static char *putAttVal(char *o, const char *s)
+/* Whole %RH: the decoder's linear value plus m10mod's terms below 0 C
+ * (+ -T / 5.5) and below -30 C (x (1 + (-30 - T) / 75)), clamped to 0..100;
+ * the linear value alone without a temperature. */
+static int32_t m10Rh(const sonde_info_t *in)
 {
-    if (g.cfg.att < ATT_BYP0) {
-        uint8_t db;
-        g.A->asset_read((uint16_t)(ATT_DB + g.cfg.att), &db, 1);
-        o = puti(o, db);
-        o = put(o, s + T_DB);
-    } else o = put(o, g.cfg.att == ATT_BYP0 ? s + T_BYP : s + T_BYP_PLUS);
-    return o;
+    int32_t rh = in->rh10, t = in->temp_c10;
+    if (in->flags & SONDE_HAS_TEMP) {
+        if (t < 0) rh += -t * 2 / 11;
+        if (t < -300) rh += rh * (-300 - t) / 750;
+    }
+    if (rh < 0) rh = 0;
+    if (rh > 1000) rh = 1000;
+    return (rh + 5) / 10;
 }
-static char *putAtt(char *o, const char *s)
-{ return putAttVal(put(o, s + T_ATT), s); }
 static void m10Temp(sonde_info_t *in)
 {
     uint16_t tab[T_N], a = in->tRaw;
@@ -136,7 +165,7 @@ static void m10Temp(sonde_info_t *in)
     a &= 0x0FFFu;
     if (!a || sc >= 3u) return;
     g.A->asset_read((uint16_t)(TEMP_TAB + sc * (T_N * 2u)), tab, sizeof tab);
-    for (uint8_t i = 0; i + 1u < T_N; i++) {
+    for (unsigned i = 0; i + 1u < T_N; i++) {
         if (a <= tab[i] && a > tab[i + 1u]) {
             in->temp_c10 = (int16_t)(i * 50 - (int)T_OFS10 +
                                      50 * (tab[i] - a) / (tab[i] - tab[i + 1u]));
@@ -146,10 +175,10 @@ static void m10Temp(sonde_info_t *in)
     }
 }
 
-static void emit(char *buf, char *end)
+static void emit(char *buf, char *end, unsigned line)
 {
     *end = '\0';
-    g.A->print_normal(buf, 0, 0, g.line++);
+    g.A->print_normal(buf, 0, 0, line);
 }
 
 static void attCycle(int8_t dir)
@@ -162,6 +191,8 @@ static void attCycle(int8_t dir)
     g.A->delay_ms(ATT_SETTLE);
 }
 
+/* Out of line: inlined, it adds register pressure (spills) to the sample loop. */
+__attribute__((noinline))
 static void draw(const char *s)
 {
     char str[34]; char *o;
@@ -169,71 +200,74 @@ static void draw(const char *s)
     g.A->display_clear(); g.A->status_clear();
     g.A->draw_battery();
     g.A->print_inverse(s + T_TITLE, 2, 0, true, true, (uint8_t)(2u + T_TITLE_CHARS * 4u));
-    if (g.fArm) g.A->asset_read(BMP_F, g.A->status_line + SPK_X, BMP_F_LEN);
-    else if (g.cfg.spk) g.A->asset_read(BMP_SPK, g.A->status_line + SPK_X, SPK_W);
-    g.line = 1;
+    if (g.cfg.beep) g.A->asset_read(BMP_SIGNAL, g.A->status_line + BEEP_X, ICON_W);
+    if (g.fArm || g.cfg.spk)
+        g.A->asset_read(g.fArm ? BMP_F : BMP_SPK, g.A->status_line + SPK_X, ICON_W);
 
     if (g.nOk) {
-        /* The position on one row: 4 decimals (11 m) keep "89.9999S 179.9999W"
-         * within the 18 columns, so the four body rows always fit. */
+        /* Fixed rows, the same in every sonde app: 1 the position (4 decimals,
+         * 11 m, keep "89.9999S 179.9999W" within the 18 columns), 2 altitude and
+         * vertical speed, 3 horizontal speed and heading, 4 the sonde's own
+         * sensors. A missing field leaves its row blank. */
         if (in->flags & SONDE_HAS_POS) {
             o = putPos(str, in->latS, 'N', 'S'); *o++ = ' ';
             o = putPos(o, in->lonS, 'E', 'W');
         } else o = put(str, s + T_NOPOS);
-        emit(str, o);
+        emit(str, o, 1);
         if (in->flags & SONDE_HAS_ALT) {
             o = put(str, s + T_ALT); o = puti(o, in->alt_m); o = put(o, s + T_M);
             if (in->flags & SONDE_HAS_VEL) {
                 o = put(o, s + T_VS); o = putVs(o, in->vs_dm);
             }
-            emit(str, o);
-        }
-        if (in->flags & SONDE_HAS_TEMP) {
-            o = put(str, s + T_TEMP); o = put1(o, in->temp_c10); o = put(o, s + T_C);
-            emit(str, o);
+            emit(str, o, 2);
         }
         if (in->flags & SONDE_HAS_VEL) {
-            o = put(str, s + T_HS); o = puti(o, (in->hs_dm + 5) / 10);
+            o = put(str, s + T_HS); o = puti(o, in->hs_ms);
             o = put(o, s + T_HDG); o = puti(o, in->hdg);
-            emit(str, o);
+            emit(str, o, 3);
         }
+        o = str;
+        if (in->flags & SONDE_HAS_TEMP) {
+            o = put(o, s + T_TEMP); o = put1(o, in->temp_c10); o = put(o, s + T_C);
+        }
+        if (in->flags & SONDE_HAS_RH) { o = put(o, s + T_RH); o = puti(o, m10Rh(in)); *o++ = '%'; }
+        if (o != str) emit(str, o, 4);
         g.A->print_bold(in->id, 0, 0, 0);
     }
-    for (unsigned x = 0; x < 128u; x += 2u) g.A->fb[5][x] |= 0x01u;
+    for (unsigned x = 0; x < 128u; x += 2u) g.A->fb[5][x] = 0x01u;   /* row 5 still blank */
 
-    o = putFreq(str, g.vfoFreq + (uint32_t)((int32_t)g.offSteps * STEP_10HZ));
+    o = putFreq(str, g.vfoFreq + (uint32_t)(g.offSteps * STEP_10HZ));
     if (g.offSteps) {
         *o++ = ' '; if (g.offSteps > 0) *o++ = '+';
-        o = puti(o, (int32_t)g.offSteps * 5); o = put(o, s + T_KHZ);
+        o = puti(o, g.offSteps * 5); o = put(o, s + T_KHZ);
     }
     tiny(str, 0, 43, o);
     o = puti(str, g.rssi); o = put(o, s + T_DBM);
     tiny(str, (uint8_t)(128u - (unsigned)(o - str) * 4u), 43, o);
     o = put(str, s + T_FRAME); o = puti(o, g.nOk);
     tiny(str, 0, 49, o);
-    o = putAtt(str, s);
+    g.A->asset_read((uint16_t)(ATT_LBL + g.cfg.att * ATT_REC), str, ATT_REC);
+    for (o = str; *o; o++) {}
     tiny(str, (uint8_t)(128u - (unsigned)(o - str) * 4u), 49, o);
 }
 
-static bool handleKey(uint8_t key)
+/* One new key press (EXIT is handled by listen). */
+static void handleKey(uint8_t key)
 {
-    if (key == APP_KEY_INVALID || key == g.prevKey) { g.prevKey = key; return false; }
-    g.prevKey = key;
-    if (key == APP_KEY_F) { g.fArm = !g.fArm; return true; }
+    if (key == APP_KEY_F) { g.fArm = !g.fArm; return; }
     const bool reverse = g.fArm;
     g.fArm = false;
     switch (key) {
-        case APP_KEY_EXIT: g.running = false; break;
-        case APP_KEY_1: g.cfg.spk ^= 1u; g.A->audio_path(g.cfg.spk); break;
+        case APP_KEY_1: g.cfg.spk = !g.cfg.spk; rxAudio(); break;
         case APP_KEY_2: {
-            int8_t n = (int8_t)(g.offSteps + (reverse ? -1 : 1));
+            int32_t n = g.offSteps + (reverse ? -1 : 1);
             if (n >= -OFF_MAX && n <= OFF_MAX) { g.offSteps = n; tune(); }
             break; }
         case APP_KEY_3: attCycle(reverse ? -1 : 1); break;
         case APP_KEY_4: g.offSteps = 0; tune(); break;
+        case APP_KEY_5: g.cfg.beep ^= 1u; break;
         default: break;
     }
-    return true;
 }
 
 __attribute__((noinline))
@@ -246,13 +280,13 @@ static void listen(const char *ui)
     uint32_t (*const clk)(void) = g.A->cycles_48mhz;
     uint16_t (*const sample)(void) = g.A->af_capture_sample;
     uint32_t next = clk();
-    uint16_t cnt = 0;
-    uint8_t armedRefresh = 0;
-    while (g.running) {
+    unsigned cnt = 0, refresh = 0;
+    bool wantUi = false;
+    for (;;) {                   /* left on EXIT */
         while ((int32_t)(clk() - next) < 0) {}
         next += CYC_PER_SAMPLE;
-        bool wantUi = false;
-        if (decm10_push(&m10, sample())) {
+        uint16_t x = sample();
+        if (decm10_push(&m10, x)) {
             sonde_info_t info;
             info.flags = 0;
             if (decm10_parse(&m10, &info)) {
@@ -260,31 +294,48 @@ static void listen(const char *ui)
                 g.info = info;
                 g.nOk++;
                 g.led = 3u; g.ledCnt = 0; g.A->led(true);
+                g.tFrame = clk(); g.track = true;
                 wantUi = true;
             }
             decm10_rearm(&m10);
         }
+        /* No poll in ST_DATA: get_key alone exceeds one sample period. */
         if (decm10_busy(&m10)) continue;
         if (g.led && ++g.ledCnt >= LED_STEP) {
             g.ledCnt = 0; g.led--; g.A->led(g.led & 1u);
         }
-        uint16_t keyEvery = g.fArm ? KEY_ARMED_EVERY : KEY_IDLE_EVERY;
-        if (!wantUi && ++cnt < keyEvery) continue;
+        if (!wantUi) {
+            if (++cnt < KEY_EVERY) continue;
+            if (g.track && (uint32_t)(clk() - g.tFrame - GUARD_LO) < GUARD_W) continue;
+        }
         cnt = 0;
-        bool fastPoll = g.fArm;
-        bool keyUi = handleKey(g.A->get_key());
-        if (!g.running) break;
-        if (wantUi || keyUi || !fastPoll || ++armedRefresh >= ARMED_REFRESH_SLOTS) {
-            armedRefresh = 0;
+        uint8_t key = g.A->get_key();
+        bool keyUi = key != g.prevKey && key != APP_KEY_INVALID;
+        g.prevKey = key;
+        if (keyUi) {
+            if (key == APP_KEY_EXIT) break;
+            handleKey(key);
+        }
+        if ((uint32_t)(clk() - g.tFrame) > TRACK_CYC) g.track = false;
+        if (wantUi || keyUi || (!g.track && ++refresh >= REFRESH_POLLS)) {
+            refresh = 0;
             g.rssi = g.A->rssi_dbm();
             g.A->battery_sample();       /* yields the capture's ADC itself */
             draw(ui);
             g.A->blit_status();
             g.A->blit_full();
             g.A->backlight_on();
+            /* The beep blocks and relocks the RX: here, between frames, after
+             * the redraw, and the slot end below resyncs the sample clock. */
+            if (wantUi && g.cfg.beep) decodeBeep();
+            wantUi = false;
+            /* Key scans and UI work span sample periods; resume from now. */
+            decm10_rearm(&m10);
+            next = clk() + CYC_PER_SAMPLE;  /* skip the samples the slot took */
+            continue;
         }
-        decm10_rearm(&m10);
-        next = clk() + CYC_PER_SAMPLE;  /* skip the samples the slot took */
+        /* A poll alone: the sample clock kept, the last sample held over it. */
+        while ((int32_t)(clk() - next) >= 0) { decm10_push(&m10, x); next += CYC_PER_SAMPLE; }
     }
 }
 
@@ -293,7 +344,7 @@ void app_main(const app_api_t *api)
 {
     uint8_t cfg[4];
     char ui[UI_SIZE] __attribute__((aligned(4)));
-    Gdiv = api; g.A = api; g.prevKey = APP_KEY_INVALID; api->led(false);
+    g.A = api; g.prevKey = APP_KEY_INVALID; api->led(false);
     api->asset_read(0, ui, UI_SIZE);
 
     api->af_capture_open();
@@ -307,14 +358,12 @@ void app_main(const app_api_t *api)
     api->cfg_load(cfg, 4);
     if (cfg[0] == CFG_MAGIC) {
         g.cfg.spk = cfg[1] == 1u;
+        g.cfg.beep = cfg[2] == 1u;
         if (cfg[3] < ATT_COUNT) g.cfg.att = cfg[3];
     } else g.cfg.att = 3u;
     applyAtt();
-    api->audio_path(g.cfg.spk);
-    api->set_af(APP_AF_FM);
-    api->bk_write(REG_47, REG_47_M10);
+    rxAudio();
     api->delay_ms(50);
-    g.running = true;
     listen(ui);
     if (g.offSteps) { g.offSteps = 0; tune(); }
     api->bk_write(BK_REG_13, r13);
@@ -324,6 +373,6 @@ void app_main(const app_api_t *api)
     api->set_af(APP_AF_MUTE);
     api->audio_path(false);
     api->led(false);
-    cfg[0] = CFG_MAGIC; cfg[1] = g.cfg.spk; cfg[2] = 0; cfg[3] = g.cfg.att;
+    cfg[0] = CFG_MAGIC; cfg[1] = g.cfg.spk; cfg[2] = g.cfg.beep; cfg[3] = g.cfg.att;
     api->cfg_save(cfg, 4);
 }
