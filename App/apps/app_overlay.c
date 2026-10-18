@@ -641,8 +641,16 @@ static void app_af_capture_close(void)
 /* ---- API level 3: 48 MHz cycle clock ----
  * Re-read the tick until it is stable around the SysTick read. A reload the
  * interrupt has not served yet leaves the tick one behind: then count it and
- * take a fresh, post-reload phase. */
-static uint32_t app_cycles_48mhz(void)
+ * take a fresh, post-reload phase.
+ * At every launch the count is set APP_CYC_TO_WRAP_S seconds before its 32-bit
+ * wrap, as Linux starts jiffies before theirs: an app that compares it without
+ * a signed difference fails a few seconds after it starts, every run, instead
+ * of once in a while depending on how long the radio has been on. */
+#define APP_CYC_TO_WRAP_S  10u
+#define APP_CYC_START      (0u - 48000000u * APP_CYC_TO_WRAP_S)
+static uint32_t app_cyc_base;
+
+static uint32_t app_cycles_raw(void)
 {
     uint32_t tick, val;
     do {
@@ -654,6 +662,11 @@ static uint32_t app_cycles_48mhz(void)
         tick++;
     }
     return tick * (SysTick->LOAD + 1u) + (SysTick->LOAD - val);
+}
+
+static uint32_t app_cycles_48mhz(void)
+{
+    return app_cycles_raw() + app_cyc_base;
 }
 
 /* ---- v2 battery / backlight ---- */
@@ -1141,6 +1154,7 @@ uint8_t APP_LaunchOverlay(uint8_t slot)
     RADIO_SetupRegisters(true);
 
     app_entry_t entry = (app_entry_t)(((uint32_t)ws + h.entry_off) | 1u);
+    app_cyc_base = APP_CYC_START - app_cycles_raw();
     entry(&app_api);
 
     /* A capture the app left open must not keep PA4 and the DAC. */

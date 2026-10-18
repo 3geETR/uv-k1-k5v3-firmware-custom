@@ -307,8 +307,9 @@ typedef struct app_api {
     void     (*af_capture_close)(void);
 
     /* Free-running count of 48 MHz core cycles: the 10 ms tick and the SysTick
-     * phase, read race-free. Wraps every ~89 s: compare with a signed
-     * difference, (int32_t)(api->cycles_48mhz() - next) < 0. */
+     * phase, read race-free. Wraps every ~89 s, the first time ~10 s after the
+     * app starts (on purpose): compare with a signed difference,
+     * (int32_t)(api->cycles_48mhz() - next) < 0, never with < or >. */
     uint32_t (*cycles_48mhz)(void);
 
     /* ---- API level 3: the frequency as the main screen draws it ----
