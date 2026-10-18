@@ -135,7 +135,6 @@ static struct {
     uint8_t handoff_from;
     uint8_t handoff_len;   /* never above APP_HANDOFF_MAX */
     bool    handoff_unread;
-    uint8_t last_slot;     /* the app that ended the last chain, or failed */
     uint8_t cfg_buf[APP_CONFIG_PROXY_MAX];
     uint8_t handoff_buf[APP_HANDOFF_MAX];
 } app_state;
@@ -1142,6 +1141,15 @@ static const app_api_t app_api = {
     .handoff_read        = app_handoff_read,
 };
 
+/* Hand-off guards: a chain of apps that hand off to each other for ever (a
+ * bug, or two apps that each start the other) would otherwise only end with a
+ * power cycle, and commit their config to flash on every hop.  A long EXIT
+ * press between two apps ends it; so do APP_HANDOFF_FAST_HOPS hand-offs in a
+ * row from apps that each ran less than APP_HANDOFF_FAST_10MS, faster than
+ * a user reads a screen and presses a key. */
+#define APP_HANDOFF_FAST_10MS 30u   /* 300 ms */
+#define APP_HANDOFF_FAST_HOPS 8u
+
 static uint8_t app_launch(uint8_t slot)
 {
     app_header_t h;
@@ -1310,44 +1318,48 @@ static uint8_t app_launch(uint8_t slot)
     return APP_OK;
 }
 
-void APP_WaitKeyRelease(void)
+bool APP_WaitKeyRelease(void)
 {
     uint8_t stable = 0;
+    uint8_t exit_left = 100;   /* polls of EXIT down before it counts as held */
     while (stable < 10u) {
-        if (!GPIO_IsPttPressed() && KEYBOARD_Poll() == KEY_INVALID)
+        const KEY_Code_t key = KEYBOARD_Poll();
+        if (!GPIO_IsPttPressed() && key == KEY_INVALID)
             stable++;
         else
             stable = 0;
+        if (key == KEY_EXIT && exit_left)
+            exit_left--;
         SYSTEM_DelayMs(10);
         APP_ModalBacklightTick(true);
     }
+    return !exit_left;
 }
+
+uint8_t gAppLastSlot;
 
 /* Run the app, then each app it hands off to, in a loop (no recursion, so no
  * stack growth).  Returns the result of the last app of the chain, which
- * APP_LastLaunchedSlot() names: the one that ended it, or a hand-off target
+ * gAppLastSlot names: the one that ended it, or a hand-off target
  * that failed to launch. */
 uint8_t APP_LaunchOverlay(uint8_t slot)
 {
-    app_state.handoff_next   = 0;
+    uint8_t fast_hops = 0;
     app_state.handoff_unread = false;   /* a menu or shortcut launch carries no message */
     for (;;) {
-        app_state.last_slot = slot;
+        gAppLastSlot = slot;
+        app_state.handoff_next = 0;
+        const uint32_t started = SCHEDULER_GetTick10ms();
         const uint8_t rc = app_launch(slot);
-        app_state.handoff_unread = false;   /* an unread message ends with its app */
         if (rc != APP_OK || !app_state.handoff_next)
             return rc;
         slot = app_state.handoff_next - 1u;
-        app_state.handoff_next   = 0;
-        app_state.handoff_unread = true;
+        fast_hops = SCHEDULER_GetTick10ms() - started < APP_HANDOFF_FAST_10MS ? fast_hops + 1u : 0u;
         /* The key that ended the sender must not reach the target as a press. */
-        APP_WaitKeyRelease();
+        if (APP_WaitKeyRelease() || fast_hops >= APP_HANDOFF_FAST_HOPS)
+            return rc;   /* runaway chain: back to the menu */
+        app_state.handoff_unread = true;   /* until read, or the target's own handoff() */
     }
-}
-
-uint8_t APP_LastLaunchedSlot(void)
-{
-    return app_state.last_slot;
 }
 
 uint8_t APP_SlotErase(uint8_t slot)
