@@ -303,22 +303,29 @@ typedef struct app_api {
     /* ---- API level 3: hand-off to another app ----
      * Only one app runs at a time, so an app asks the loader to launch the
      * next one after it returns.  handoff() names the installed app to launch
-     * and stages up to APP_HANDOFF_MAX bytes for it, in RAM only.  name is
-     * APP_NAME_LEN bytes, NUL-padded as in the header, which a
-     * static const char name[APP_NAME_LEN] = "..." is.  The calling app then
-     * returns as usual: the loader commits its config, then launches the target
-     * instead of going back to the menu.  The last call wins: a name no
-     * valid app has returns false and leaves nothing pending, which also
-     * cancels an earlier call.  Copies min(len, APP_HANDOFF_MAX) bytes from
-     * msg (NULL only with len 0); a longer len is clamped. */
-    bool    (*handoff)(const char name[APP_NAME_LEN], const void *msg, uint8_t len);
-    /* The message handed to this app and its sender's name.  Copies
-     * min(message length, max) bytes into buf and returns that count; 0 when
+     * and stages up to APP_HANDOFF_MAX bytes for it, in RAM only.  name is a
+     * C string, e.g. handoff("APRS TX", ...), compared with the header name
+     * over APP_NAME_LEN bytes at most.  The calling app then returns as usual:
+     * the loader commits its config, waits for every key to be released, then
+     * launches the target instead of going back to the menu, and the target's
+     * APP_FLAG_EXIT_TO_MAIN decides where the chain ends.  true means a
+     * compatible target (valid header, this firmware's overlay VMA) was found
+     * and the launch is scheduled, not that it will succeed: a CRC failure is
+     * reported by the menu under the target's name.  The last call wins: no
+     * compatible app with that name returns false and leaves nothing pending,
+     * which also cancels an earlier call.  Copies min(len, APP_HANDOFF_MAX)
+     * bytes from msg; a longer len is clamped.  len 0 (msg may then be NULL)
+     * is a hand-off without payload: the target still learns its sender. */
+    bool    (*handoff)(const char *name, const void *msg, uint8_t len);
+    /* The message handed to this app and its sender's name.  Returns -1 when
      * the app was launched from the menu or a shortcut (buf and from are then
-     * untouched).  from receives exactly APP_NAME_LEN bytes, NUL-padded but not
-     * NUL-terminated when the name fills them: give it char[APP_NAME_LEN + 1].
-     * Read once: call it at launch, before handoff(), which reuses the buffer. */
-    uint8_t (*handoff_read)(void *buf, uint8_t max, char *from);
+     * untouched), else the message length (0 to APP_HANDOFF_MAX), of which
+     * min(length, max) bytes are copied into buf: a return above max means
+     * the message was cut.  buf may be NULL when max is 0.  from, unless NULL,
+     * receives the sender's name as a C string: give it char[APP_NAME_LEN + 1].
+     * Read once, -1 afterwards: call it at launch, before handoff(), which
+     * replaces the message. */
+    int16_t (*handoff_read)(void *buf, uint8_t max, char *from);
 } app_api_t;
 
 /* Unconditional, for the same reason: these offsets are what the apps and
