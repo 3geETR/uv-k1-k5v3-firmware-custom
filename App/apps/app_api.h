@@ -35,6 +35,7 @@
 #ifndef APPS_APP_API_H
 #define APPS_APP_API_H
 
+#include <stddef.h>   /* offsetof */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -45,12 +46,22 @@
  *      idivmod, uidivmod (the resident division helpers), Labs system info,
  *      current and minimum-since-boot free stack/RAM margin
  *   3  append_i32 / append_u32 (resident decimal formatters), af_capture_open /
- *      sample / close (RX audio on PA4), cycles_48mhz, draw_frequency; the
- *      Labs system
- *      information slots become part of the layout in every build, so the
- *      level 3 services sit at one offset for every app */
+ *      sample / close (RX audio on PA4), cycles_48mhz, draw_frequency,
+ *      handoff / handoff_read; the Labs system information slots become part
+ *      of the layout in every build, so level 3 services have one offset */
 #define APP_ABI_MAJOR  1u
 #define APP_API_LEVEL  3u
+
+/* App name length in app_header_t, the name handoff() takes (API level 3). */
+#define APP_NAME_LEN    16
+
+/* Largest message handoff() carries from one app to the next (API level 3):
+ * raw bytes, not NUL-terminated.  32 covers a position, a symbol and a short
+ * ID.  It can be raised in a later release (one byte of resident RAM, i.e. of
+ * stack margin, per byte; len stays uint8_t, 255 at most); an older firmware
+ * then clamps, so receivers must check the length handoff_read() returns.  It
+ * must never be lowered. */
+#define APP_HANDOFF_MAX 32u
 
 /* Minimum API level of an app that ships read-only assets (pack_app.py). */
 #define APP_API_ASSETS 2u
@@ -269,9 +280,13 @@ typedef struct app_api {
     uint64_t (*uidivmod)(uint32_t n, uint32_t d);
 
     /* ---- API level 2: zero-code Labs system information ----
-     * Always part of the layout, whatever the build defines: every later field
-     * keeps one offset for every app. NULL when the resident firmware is built
-     * without ENABLE_FEAT_F4HWN_OVERLAY_INFO. */
+     * Valid only with APP_CAP_SYSINFO (the loader sets them only with
+     * ENABLE_FEAT_F4HWN_OVERLAY_INFO, NULL otherwise).  The fields themselves
+     * are in the layout of every build, not under that #ifdef: apps are built
+     * apart from the firmware and mostly without the define, so an #ifdef here
+     * would put every later service at one offset in the app (276) and another
+     * in a Labs firmware (328), and the app would call the wrong address.
+     * Costs nothing in Labs, the only edition with overlay apps. */
     const char *sys_edition;
     const char *sys_version;
     const char *sys_build_date;
@@ -326,14 +341,46 @@ typedef struct app_api {
     /* Unsigned decimal of u at dst, no leading zeros, over the whole uint32
      * range. Not NUL-terminated: returns the end. Writes at most 10 chars. */
     char *(*append_u32)(char *dst, uint32_t u);
+
+    /* ---- API level 3: hand-off to another app ----
+     * Only one app runs at a time, so an app asks the loader to launch the
+     * next one after it returns.  handoff() names the installed app to launch
+     * and stages up to APP_HANDOFF_MAX bytes for it, in RAM only.  name is a
+     * C string, e.g. handoff("APRS TX", ...), compared with the header name
+     * over APP_NAME_LEN bytes at most.  The calling app then returns as usual:
+     * the loader commits its config, waits for every key to be released, then
+     * launches the target instead of going back to the menu, and the target's
+     * APP_FLAG_EXIT_TO_MAIN decides where the chain ends.  true means a
+     * compatible target (valid header, this firmware's overlay VMA) was found
+     * and the launch is scheduled, not that it will succeed: a CRC failure is
+     * reported by the menu under the target's name.  The last call wins: no
+     * compatible app with that name returns false and leaves nothing pending,
+     * which also cancels an earlier call.  Copies min(len, APP_HANDOFF_MAX)
+     * bytes from msg; a longer len is clamped.  len 0 (msg may then be NULL)
+     * is a hand-off without payload: the target still learns its sender.
+     * A chain that never ends is cut back to the menu: a long EXIT press
+     * between two apps, or 8 hand-offs in a row from apps that each ran less
+     * than 300 ms. */
+    bool    (*handoff)(const char *name, const void *msg, uint8_t len);
+    /* The message handed to this app and its sender's name.  Returns -1 when
+     * the app was launched from the menu or a shortcut (buf and from are then
+     * untouched), else the message length (0 to APP_HANDOFF_MAX), of which
+     * min(length, max) bytes are copied into buf: a return above max means
+     * the message was cut.  buf may be NULL when max is 0.  from, unless NULL,
+     * receives the sender's name as a C string: give it char[APP_NAME_LEN + 1].
+     * Read once, -1 afterwards: call it at launch, before handoff(), which
+     * replaces the message. */
+    int16_t (*handoff_read)(void *buf, uint8_t max, char *from);
 } app_api_t;
 
-/* The v2 table, frozen: level 3 services start right after it. */
-_Static_assert(__builtin_offsetof(app_api_t, append_i32) == 328u,
-               "the level 2 prefix must stay 328 bytes");
-/* The level 3 table, frozen: a new service goes after it, with a new level. */
-_Static_assert(sizeof(app_api_t) == 356u,
-               "the level 3 API table must stay 356 bytes");
+/* Unconditional, for the same reason: these offsets are what the apps and
+ * the firmware must agree on, whatever the build options. */
+_Static_assert(offsetof(app_api_t, sys_edition) == 276u &&
+               offsetof(app_api_t, append_i32) == 328u,
+               "the level 2 API prefix must stay 328 bytes");
+_Static_assert(offsetof(app_api_t, handoff) == 356u &&
+               sizeof(app_api_t) == 364u,
+               "app_api_t is append-only: every edition shares this layout");
 
 /* Wrap-safe modular ordering for deadlines less than half a cycle-counter
  * period away (~44.7 s at 48 MHz). Unused helpers emit no application code. */

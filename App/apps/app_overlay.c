@@ -29,6 +29,7 @@
 #include "driver/bk1080.h"
 #include "app/fm.h"
 #endif
+#include "driver/gpio.h"
 #include "driver/keyboard.h"
 #include "driver/mb_flash.h"
 #include "driver/py25q16.h"
@@ -127,7 +128,15 @@ static struct {
     bool shortcuts_cached;
     uint8_t shortcut_slots[APP_SHORTCUT_COUNT];   /* per position, 0xFF = none */
     uint8_t slot_revision;
+    /* Hand-off mailbox (RAM only): the slot to launch next, plus one (0 =
+     * none); the message, its length and the sender's slot; whether the
+     * running app was launched by a hand-off it has not read yet. */
+    uint8_t handoff_next;
+    uint8_t handoff_from;
+    uint8_t handoff_len;   /* never above APP_HANDOFF_MAX */
+    bool    handoff_unread;
     uint8_t cfg_buf[APP_CONFIG_PROXY_MAX];
+    uint8_t handoff_buf[APP_HANDOFF_MAX];
 } app_state;
 
 /* ---- ABI wrappers: the few resident calls that are not a direct signature match ---- */
@@ -841,6 +850,68 @@ static void app_config_proxy_resolve(void)
     }
 }
 
+/* ---- hand-off (API level 3) ----
+ * handoff() only resolves the target and stages the message; the launch happens
+ * in APP_LaunchOverlay once the running app has returned and its config is
+ * committed, so the overlay is never overwritten under the running code. */
+_Static_assert(APP_HANDOFF_MAX >= 1u && APP_HANDOFF_MAX <= UINT8_MAX,
+               "hand-off lengths are uint8_t: a larger mailbox would wrap the clamp");
+
+/* A header's NUL-padded name against a C string, like strncmp over
+ * APP_NAME_LEN: never reads name past its NUL, nor past APP_NAME_LEN bytes. */
+static bool app_name_is(const char field[APP_NAME_LEN], const char *name)
+{
+    for (uint8_t i = 0; i < APP_NAME_LEN; i++) {
+        if (field[i] != name[i])
+            return false;
+        if (name[i] == '\0')
+            return true;
+    }
+    return true;
+}
+
+static bool app_handoff(const char *name, const void *msg, uint8_t len)
+{
+    /* The last call wins: start from an empty mailbox, which a failed call
+     * leaves as is.  It also drops a message this app has not read. */
+    app_state.handoff_next   = 0;
+    app_state.handoff_len    = 0;
+    app_state.handoff_unread = false;
+    const uint32_t overlay_vma = (uint32_t)PY25Q16_OverlayBuffer();
+    for (uint8_t slot = 0; slot < APP_SLOT_COUNT; slot++) {
+        app_header_t h;
+        if (app_read_validated_header(slot, &h) != APP_OK ||
+            h.link_vma != overlay_vma || !app_name_is(h.name, name))
+            continue;
+        if (len > APP_HANDOFF_MAX)
+            len = APP_HANDOFF_MAX;   /* bounds the copy into handoff_buf */
+        if (len)
+            memcpy(app_state.handoff_buf, msg, len);
+        app_state.handoff_len  = len;
+        app_state.handoff_from = app_state.run_slot;
+        app_state.handoff_next = slot + 1u;
+        return true;
+    }
+    return false;
+}
+
+static int16_t app_handoff_read(void *buf, uint8_t max, char *from)
+{
+    if (!app_state.handoff_unread)
+        return -1;
+    app_state.handoff_unread = false;   /* read once */
+    const uint8_t len = app_state.handoff_len;
+    const uint8_t n = len < max ? len : max;   /* bounds the copy into the app's buf */
+    if (n)
+        memcpy(buf, app_state.handoff_buf, n);
+    if (from) {
+        PY25Q16_ReadBuffer(APP_SLOT_BASE(app_state.handoff_from) +
+                           offsetof(app_header_t, name), from, APP_NAME_LEN);
+        from[APP_NAME_LEN] = '\0';
+    }
+    return len;
+}
+
 uint8_t APP_ValidateSlot(uint8_t slot, app_header_t *out_header)
 {
     app_header_t h;
@@ -1063,9 +1134,23 @@ static const app_api_t app_api = {
     .cycles_48mhz        = app_cycles_48mhz,
     .draw_frequency      = app_draw_frequency,
     .append_u32          = app_append_u32,
+    /* Outside the block above: the hand-off is a loader service, available
+     * wherever overlay apps are (this whole file), with or without the
+     * system information; inside it, an app would call a NULL pointer. */
+    .handoff             = app_handoff,
+    .handoff_read        = app_handoff_read,
 };
 
-uint8_t APP_LaunchOverlay(uint8_t slot)
+/* Hand-off guards: a chain of apps that hand off to each other for ever (a
+ * bug, or two apps that each start the other) would otherwise only end with a
+ * power cycle, and commit their config to flash on every hop.  A long EXIT
+ * press between two apps ends it; so do APP_HANDOFF_FAST_HOPS hand-offs in a
+ * row from apps that each ran less than APP_HANDOFF_FAST_10MS, faster than
+ * a user reads a screen and presses a key. */
+#define APP_HANDOFF_FAST_10MS 30u   /* 300 ms */
+#define APP_HANDOFF_FAST_HOPS 8u
+
+static uint8_t app_launch(uint8_t slot)
 {
     app_header_t h;
     uint8_t rc = app_read_validated_header(slot, &h);
@@ -1231,6 +1316,50 @@ uint8_t APP_LaunchOverlay(uint8_t slot)
     RXTX_LOG_Resume();
 #endif
     return APP_OK;
+}
+
+bool APP_WaitKeyRelease(void)
+{
+    uint8_t stable = 0;
+    uint8_t exit_left = 100;   /* polls of EXIT down before it counts as held */
+    while (stable < 10u) {
+        const KEY_Code_t key = KEYBOARD_Poll();
+        if (!GPIO_IsPttPressed() && key == KEY_INVALID)
+            stable++;
+        else
+            stable = 0;
+        if (key == KEY_EXIT && exit_left)
+            exit_left--;
+        SYSTEM_DelayMs(10);
+        APP_ModalBacklightTick(true);
+    }
+    return !exit_left;
+}
+
+uint8_t gAppLastSlot;
+
+/* Run the app, then each app it hands off to, in a loop (no recursion, so no
+ * stack growth).  Returns the result of the last app of the chain, which
+ * gAppLastSlot names: the one that ended it, or a hand-off target
+ * that failed to launch.  A runaway-chain guard returns APP_CHAIN_ABORTED. */
+uint8_t APP_LaunchOverlay(uint8_t slot)
+{
+    uint8_t fast_hops = 0;
+    app_state.handoff_unread = false;   /* a menu or shortcut launch carries no message */
+    for (;;) {
+        gAppLastSlot = slot;
+        app_state.handoff_next = 0;
+        const uint32_t started = SCHEDULER_GetTick10ms();
+        const uint8_t rc = app_launch(slot);
+        if (rc != APP_OK || !app_state.handoff_next)
+            return rc;
+        slot = app_state.handoff_next - 1u;
+        fast_hops = SCHEDULER_GetTick10ms() - started < APP_HANDOFF_FAST_10MS ? fast_hops + 1u : 0u;
+        /* The key that ended the sender must not reach the target as a press. */
+        if (APP_WaitKeyRelease() || fast_hops >= APP_HANDOFF_FAST_HOPS)
+            return APP_CHAIN_ABORTED;
+        app_state.handoff_unread = true;   /* until read, or the target's own handoff() */
+    }
 }
 
 uint8_t APP_SlotErase(uint8_t slot)
