@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CW Keyer read-only UI assets and receive profile."""
+"""CW Keyer variant read-only UI assets and receive profile."""
 
 import os
 import sys
@@ -9,16 +9,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 from app_assets import Assets
 
-TITLE = "CW KEYER"
+USB_VARIANT = os.environ.get("CW_KEYER_USB") == "1"
+TITLE = "CW USB" if USB_VARIANT else "CW KEYER"
 
-a = Assets("CWKEYER")
+a = Assets("CWUSB" if USB_VARIANT else "CWKEYER")
 a.text("T_TITLE", TITLE)
 # build.sh passes the version it packs into the .app header.
 a.text("T_VERSION", os.environ.get("APP_VER", "dev"))
 a.text("T_READY", "RX")
 a.text("T_DENIED", "TX OFF")
 a.table("T_MODE", ["STRAIGHT", "PADDLE"])
-a.table("T_PORT", ["SIDE ", "USB "])
 a.table("T_ORDER", ["DI-DA", "DA-DI"])
 a.text("T_DBM", " dBm")
 a.text("T_SPEED", "WPM ")
@@ -47,7 +47,8 @@ a.text("T_HELP_STEP", "Tuning step 100 Hz")
 # empty.
 a.table("T_HELP_KEYS", [
     "0 SPEAKER", "1 MODE", "2 WPM", "3 TONE", "4 BREAK-IN", "5 ORDER",
-    "6 XTAL", "7 PORT", "F+ DECREASE", "UP/DN FREQ", "PTT STRAIGHT", "",
+    "6 XTAL", "USB KEY/PAD" if USB_VARIANT else "SIDE1/2 KEY",
+    "F+ DECREASE", "UP/DN FREQ", "PTT STRAIGHT", "",
 ])
 a.const("T_TITLE_CHARS", len(TITLE))
 a.main()

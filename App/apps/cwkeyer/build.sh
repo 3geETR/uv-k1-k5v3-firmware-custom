@@ -5,7 +5,7 @@ set -euo pipefail
 
 APP="$(basename "$PWD")"
 APP_NAME="CW Keyer"
-APP_VER="1.0"
+APP_VER="1.1"
 APP_API_MIN=3
 APP_VMA=${APP_VMA:-0x20000280}
 OUT="${APP_NAME// /}"
@@ -24,7 +24,7 @@ rm -f ./*.app ./*.elf ./*.bin
 step() { printf '\r  🔨 %-13s [%d/4] %-8s' "$APP_NAME" "$1" "$2"; }
 trap 'printf "\r  ❌ %-13s build failed            \n" "$APP_NAME"' ERR
 
-step 1 assets  ; APP_VER="$APP_VER" python3 ./gen_assets.py "${APP}_assets.bin" "${APP}_assets.h"
+step 1 assets  ; CW_KEYER_USB=0 APP_VER="$APP_VER" python3 ./gen_assets.py "${APP}_assets.bin" "${APP}_assets.h"
 step 2 compile ; "$CC" $CFLAGS $LDFLAGS "${APP}_app.c" -lgcc -o "${APP}.elf"
 step 3 objcopy ; "$OBJCOPY" -O binary "${APP}.elf" "${APP}.bin"
 step 4 pack    ; python3 ../pack_app.py "${APP}.bin" "${OUT}.app" \

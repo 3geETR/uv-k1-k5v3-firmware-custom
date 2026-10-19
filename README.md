@@ -136,7 +136,7 @@ remains available for navigation and operation.
 
 ### Overlay applications and APRS
 
-Labs can store up to 48 applications from the current collection of 33 in
+Labs can store up to 48 applications from the current collection of 34 in
 external Flash. Each app is loaded into a dedicated 4 KiB RAM overlay only
 while it is running, while larger read-only assets such as text, fonts, bitmaps
 and lookup tables remain in external Flash.
@@ -146,7 +146,7 @@ The current app collection includes:
 - radio tools: Broadcast FM, Fox Hunt, Beacon, Beam, Signal Finder, Spectrum3D
   and ToneCall,
 - digital and signal apps: ACARS RX, ATIS RX, APRS RX, APRS TX, APRS Edit,
-  APRS DIGI, CW Decode, CW Keyer, SSTV, POCSAG RX, Sonde M10, Sonde M20,
+  APRS DIGI, CW Decode, CW Keyer, CW USB, SSTV, POCSAG RX, Sonde M10, Sonde M20,
   Sonde RS41 and EPIRB 406,
 - tools and diagnostics: Resistor, System Info and Flash Map,
 - games and demos: Breakout, Cube3D, Minesweeper, Plasma, Rapid Roll, Snake,

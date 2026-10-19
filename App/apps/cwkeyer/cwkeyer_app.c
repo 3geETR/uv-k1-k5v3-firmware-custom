@@ -19,19 +19,19 @@
  */
 
 /*
- * CW Keyer - self-contained A1A-style manual keyer overlay.
+ * CW Keyer - self-contained A1A-style manual keyer overlay shared by two apps.
  *
- * PTT is always a straight key. The paddle port is either SIDE1/SIDE2 or a
- * paddle on the USB-C connector (D+ = dit, D- = dah, closed to ground). Modes:
- * STRAIGHT and PADDLE (automatic dits and dahs, alternating on a squeeze, no
- * paddle memory). get_key() reports one key only, so a squeeze is only visible
- * on the USB port, whose two contacts are read together from GPIOA_IDR; on
- * SIDE1/SIDE2 the paddle mode behaves as a single-paddle keyer.
+ * CW Keyer uses PTT and SIDE1/SIDE2. CW USB uses PTT and a paddle on the
+ * USB-C connector (D+ = dit, D- = dah, closed to ground). PTT is always a
+ * straight key. Both apps offer STRAIGHT and PADDLE modes (automatic dits and
+ * dahs, alternating on a squeeze, no paddle memory). get_key() reports one key
+ * only, so a squeeze is visible only in the USB variant, whose two contacts are
+ * sampled together from GPIOA_IDR. The SIDE variant is a single-paddle keyer.
  *
- * USB port: on entry the app sets PA11/PA12 to inputs with pull-up and stops
- * the USB clock (a powered USB device holds D+ for about two seconds after a
- * contact closes). Only those bits are touched, under masked IRQs, and they are
- * put back on exit, so the PC link works again once the app is closed.
+ * In the USB variant, the app sets PA11/PA12 to inputs with pull-up and stops
+ * the USB clock on entry (a powered USB device holds D+ for about two seconds
+ * after a contact closes). Only those bits are touched, under masked IRQs, and
+ * they are restored on exit so the PC link works again once the app is closed.
  *
  * Element timing is measured on the SysTick counter rather than by counting
  * 1 ms waits: each wait iteration also scans the keypad (about 0.2 ms), which
@@ -46,7 +46,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "../app_api.h"
+
+#ifndef CW_KEYER_USB
+#define CW_KEYER_USB 0
+#endif
+
+#if !CW_KEYER_USB
 #include "cwkeyer_assets.h"
+#endif
 
 #define CFG_MAGIC          0xCBu   /* 0.4: crystal correction in REG_3B steps;
                                       0.2 used 0xCA, no longer converted */
@@ -88,10 +95,11 @@
 #define SMETER_EVERY_MS    100u
 #define BATTERY_MS         500u
 #define F_X                  72u
+#define STATE_X              43u
 #define TAG_LEFT_X            2u
 #define TAG_RIGHT_X          87u
 #define HELP_RIGHT_X         79u
-#define DEBOUNCE_POLLS        3u   /* straight key: ~3.5 ms of stable reading */
+#define DEBOUNCE_POLLS        3u   /* contacts: 5 identical polls, ~4.8 ms */
 
 _Static_assert(SMETER_BAR_X + SMETER_MAX_LEVEL * 5u <= 128u,
                "CW S-meter bars exceed the display width");
@@ -120,24 +128,27 @@ _Static_assert(1200u / WPM_MAX > 2u * RAMP_MS,
 #define AUDIO_GAIN_BASE_MASK 0xFFF0u
 #define AUDIO_DAC_GAIN_MAX     15u
 
-/* These values are already returned by get_key(), but API level 2 only names
+#if !CW_KEYER_USB
+/* These values are already returned by get_key(), but the app API only names
  * codes through PTT. They mirror KEY_SIDE2=17 and KEY_SIDE1=18. */
 #define KEY_SIDE2          17u
 #define KEY_SIDE1          18u
+#endif
 
 enum { MODE_STRAIGHT, MODE_PADDLE };
-enum { PORT_SIDE, PORT_USB };
+#if CW_KEYER_USB
 #define GPIOA_MODER (*(volatile uint32_t *)0x50000000u)
 #define GPIOA_PUPDR (*(volatile uint32_t *)0x5000000Cu)
 #define GPIOA_IDR   (*(volatile uint32_t *)0x50000010u)
 #define RCC_APBENR1 (*(volatile uint32_t *)0x4002103Cu)
-#define SYST_LOAD   (*(volatile uint32_t *)0xE000E014u)
-#define SYST_VAL    (*(volatile uint32_t *)0xE000E018u)
 #define USBEN       (1u << 23)
 #define PIN_DM      11u   /* PA11 USB D-, adapter ring  */
 #define PIN_DP      12u   /* PA12 USB D+, adapter tip   */
 #define USB_PINS    (0xFu << (2u * PIN_DM))   /* PA11/PA12 MODER and PUPDR */
 #define USB_PULLUP  (0x5u << (2u * PIN_DM))
+#endif
+#define SYST_LOAD   (*(volatile uint32_t *)0xE000E014u)
+#define SYST_VAL    (*(volatile uint32_t *)0xE000E018u)
 #define P_DIT 1u
 #define P_DAH 2u
 
@@ -145,7 +156,7 @@ typedef struct {
     uint8_t magic, wpm, mode, reverse;
     int16_t calSteps;
     uint16_t rxPitchHz, breakInMs;
-    uint8_t speaker, port;
+    uint8_t speaker, reservedPort;
 } config_t;
 
 _Static_assert(sizeof(config_t) <= 16u, "CW Keyer config exceeds overlay slot");
@@ -157,14 +168,19 @@ static struct {
     const app_api_t *A;
     bool running, txReady, keyDown, denied, fArm, redraw, statusRedraw;
     bool uiHandled, help;
-    bool reverse, speaker, portOpen;
-    uint8_t wpm, mode, port, uiCandidate, paBias, paControl;
+    bool reverse, speaker;
+#if CW_KEYER_USB
+    bool portOpen;
+#endif
+    uint8_t wpm, mode, uiCandidate, paBias, paControl;
     uint8_t padRaw, padStable, padPolls;
     uint8_t smMs;
     int16_t calSteps, tuneOffset10Hz;
     uint16_t rxPitchHz, breakInMs, xtalBase;
     uint16_t serviceMs, batteryMs, markMs, hangElapsedMs;
+#if CW_KEYER_USB
     uint32_t moder, pupdr, apbenr1;   /* saved USB-port bits only */
+#endif
     uint32_t ticksPerMs, lastVal;
     int32_t smDbm;   /* held reading, capped at SMETER_DBM_MAX */
     uint32_t uiCandidateAt, navRepeatAt;
@@ -258,8 +274,8 @@ static void configureCwRx(bool enableAudio)
     a->bk_write(REG_TX_LINK, TX_LINK_OFF);
     a->bk_write(REG_TX_LINK, rxLink);
 
-    /* Use the BK4829 USB baseband output as a CW product detector. Tuning the
-     * receiver below the carrier produces the configured receive tone. */
+    /* Use BK4829 AF output 5, the upper-sideband baseband route, as a CW
+     * product detector. Tuning below the carrier produces the receive tone. */
     a->bk_write(REG_AM_CTRL, a->bk_read(REG_AM_CTRL) & 0xFFFEu);
     /* The RX level, filter and audio register / value pairs (RX_PROFILE in
      * gen_assets.py). */
@@ -281,7 +297,7 @@ static void returnToRx(void)
 {
     const app_api_t *const a = A;   /* one load: calls may change g */
     /* Fade the AF DAC before toggling AUDIO_PA_EN, then restore it only after
-     * the USB output and the amplifier have both settled. */
+     * the baseband output and the amplifier have both settled. */
     uint16_t gainBase = a->bk_read(REG_AUDIO_GAIN) & AUDIO_GAIN_BASE_MASK;
     if (g.speaker)
         fadeAudioGain(gainBase, false);
@@ -309,11 +325,6 @@ static void returnToRx(void)
 static uint16_t dotMs(void)
 {
     return (uint16_t)(uint32_t)A->uidivmod(1200u, g.wpm);
-}
-
-static bool isSide(uint8_t key)
-{
-    return key == KEY_SIDE1 || key == KEY_SIDE2;
 }
 
 /* A capsule of the two-column layouts, from x to the end of its column: the
@@ -357,8 +368,8 @@ static void drawMainStatus(void)
     if (g.denied || !g.txReady) {
         const bool help = g.help, denied = g.denied;
         text(t, help ? T_HELP : denied ? T_DENIED : T_READY);
-        a->print_inverse(t, 43u, 0u, true, true,
-                         (uint8_t)(43u + (help ? T_HELP_LEN - 1u
+        a->print_inverse(t, STATE_X, 0u, true, true,
+                         (uint8_t)(STATE_X + (help ? T_HELP_LEN - 1u
                                           : denied ? T_DENIED_LEN - 1u
                                                    : T_READY_LEN - 1u) * 4u));
     }
@@ -449,8 +460,7 @@ static void serviceSmeter(void)
 
 static void drawMain(void)
 {
-    /* Room for a port label followed by a TEXT_MAX asset read. */
-    char s[TEXT_MAX + 8u], right[TEXT_MAX + 8u];
+    char s[TEXT_MAX], right[TEXT_MAX + 8u];
     drawMainStatus();
 
     drawBigFrequency(s);
@@ -471,8 +481,7 @@ static void drawMain(void)
     drawConfigTag(s, TAG_LEFT_X, 5u);
     drawConfigTag(right, TAG_RIGHT_X, 5u);
 
-    out = putText(s, T_PORT + g.port * T_PORT_STRIDE);
-    putText(out, (uint16_t)(T_ORDER + g.reverse * T_ORDER_STRIDE));
+    putText(s, (uint16_t)(T_ORDER + g.reverse * T_ORDER_STRIDE));
     out = putText(right, T_XTAL);
     out = putCalibration(out);
     *out = '\0';
@@ -559,6 +568,7 @@ static void rampDown(void)
     A->bk_write(REG_TX_LINK, TX_LINK_NO_PA);
 }
 
+#if CW_KEYER_USB
 static uint32_t irqSave(void)
 {
     uint32_t primask;
@@ -576,7 +586,7 @@ static void irqRestore(uint32_t primask)
  * named bits only, IRQs masked. */
 static void portSet(bool open)
 {
-    if (open == g.portOpen || (open && g.port != PORT_USB))
+    if (open == g.portOpen)
         return;
     const uint32_t irq = irqSave();
     if (open) {
@@ -590,6 +600,7 @@ static void portSet(bool open)
     irqRestore(irq);
     g.portOpen = open;
 }
+#endif
 
 /* CPU clock ticks since the previous call, from the 10 ms SysTick down-counter.
  * Valid while calls are less than 10 ms apart. */
@@ -605,24 +616,36 @@ static uint32_t ticksSince(void)
 static uint8_t paddles(uint8_t key)
 {
     uint8_t p = 0u;
-    if (g.port == PORT_USB) {
-        const uint32_t a = ~GPIOA_IDR;
-        if (a & (1u << PIN_DP)) p = P_DIT;
-        if (a & (1u << PIN_DM)) p |= P_DAH;
-    } else if (key == KEY_SIDE1) {
+#if CW_KEYER_USB
+    (void)key;
+    const uint32_t pins = ~GPIOA_IDR;
+    if (pins & (1u << PIN_DP))
+        p = P_DIT;
+    if (pins & (1u << PIN_DM))
+        p |= P_DAH;
+#else
+    if (key == KEY_SIDE1) {
         p = P_DIT;
     } else if (key == KEY_SIDE2) {
         p = P_DAH;
     }
-    /* A straight key keys on the tip only, so a mono plug (ring shorted to
-     * sleeve) works; the two SIDE keys stay parallel straight keys. */
-    if (g.mode == MODE_STRAIGHT)
-        return g.port == PORT_SIDE ? (uint8_t)(p != 0u) : (uint8_t)(p & P_DIT);
+#endif
+    /* In the USB variant a straight key uses the tip only, so a mono plug
+     * works. In the SIDE variant both keys remain parallel straight keys. */
+    if (g.mode == MODE_STRAIGHT) {
+#if CW_KEYER_USB
+        return (uint8_t)(p & P_DIT);
+#else
+        return (uint8_t)(p != 0u);
+#endif
+    }
     return g.reverse ? (uint8_t)(((p & 1u) << 1) | (p >> 1)) : p;
 }
 
-/* A contact must read the same on DEBOUNCE_POLLS consecutive polls before the
- * straight-key and keyer-start decisions see it. */
+/* A contact change reaches the straight-key and keyer-start decisions once it
+ * has read the same on DEBOUNCE_POLLS + 2 consecutive polls: the change, the
+ * DEBOUNCE_POLLS confirmations, then the poll that latches it. At one poll
+ * per ~1.2 ms (keypad scan plus the 1 ms wait), that is about 4.8 ms. */
 static uint8_t debounced(uint8_t p)
 {
     if (p != g.padRaw) {
@@ -792,10 +815,16 @@ static bool keyerWait(uint16_t ms)
 
 static void runPaddle(uint8_t p)
 {
+#if CW_KEYER_USB
     uint8_t last = 0u;
+#endif
     g.exitTicks = 0u;
     while (p) {
+#if CW_KEYER_USB
         const uint8_t el = p != (P_DIT | P_DAH) ? p : last == P_DIT ? P_DAH : P_DIT;
+#else
+        const uint8_t el = p;
+#endif
         if (!keyOn())
             return;
         const uint16_t dot = dotMs();
@@ -806,7 +835,9 @@ static void runPaddle(uint8_t p)
         keyOff();
         if (!done || !keyerWait((uint16_t)(dot - RAMP_MS + 1u)))
             return;
+#if CW_KEYER_USB
         last = el;
+#endif
         p = paddles(A->get_key());
     }
 }
@@ -847,11 +878,6 @@ static void adjustSetting(uint8_t key, int8_t direction)
             break;
         case APP_KEY_1:
             g.mode = (uint8_t)(g.mode ^ 1u);
-            break;
-        case APP_KEY_7:
-            portSet(false);
-            g.port = (uint8_t)(g.port ^ 1u);
-            portSet(true);
             break;
         case APP_KEY_2: {
             int16_t wpm = g.wpm;
@@ -925,7 +951,7 @@ static void handleUiKey(uint8_t key)
             g.statusRedraw = true;
             break;
         case APP_KEY_0: case APP_KEY_1: case APP_KEY_2: case APP_KEY_3:
-        case APP_KEY_4: case APP_KEY_5: case APP_KEY_6: case APP_KEY_7:
+        case APP_KEY_4: case APP_KEY_5: case APP_KEY_6:
             adjustSetting(key, g.fArm ? -1 : 1);
             g.fArm = false;
             g.statusRedraw = true;
@@ -978,11 +1004,10 @@ static void loadConfig(void)
      * defaults. */
     if (cfg.magic == CFG_MAGIC &&
         cfg.wpm >= WPM_MIN && cfg.wpm <= WPM_MAX &&
-        cfg.mode <= MODE_PADDLE && cfg.port <= PORT_USB && cfg.reverse <= 1u) {
+        cfg.mode <= MODE_PADDLE && cfg.reverse <= 1u) {
         g.wpm = cfg.wpm;
         g.mode = cfg.mode;
         g.reverse = cfg.reverse;
-        g.port = cfg.port;
         g.calSteps = cfg.calSteps >= CAL_MIN && cfg.calSteps <= CAL_MAX
             ? cfg.calSteps : CAL_DEFAULT;
     } else {
@@ -1005,7 +1030,7 @@ static void saveConfig(void)
 {
     const config_t cfg = {
         CFG_MAGIC, g.wpm, g.mode, (uint8_t)g.reverse, g.calSteps,
-        g.rxPitchHz, g.breakInMs, (uint8_t)g.speaker, g.port
+        g.rxPitchHz, g.breakInMs, (uint8_t)g.speaker, 0u
     };
     A->cfg_save((const uint8_t *)&cfg, sizeof(cfg));
 }
@@ -1020,7 +1045,9 @@ void app_main(const app_api_t *api)
     g.smDbm = SMETER_DBM_START;
     resetUiInput();
     loadConfig();
+#if CW_KEYER_USB
     portSet(true);
+#endif
     g.ticksPerMs = (uint32_t)A->uidivmod(SYST_LOAD + 1u, 10u);
     A->backlight_on();
     g.xtalBase = A->bk_read(REG_XTAL);
@@ -1041,7 +1068,7 @@ void app_main(const app_api_t *api)
         /* A denied key-down is latched until every keying control is released;
          * otherwise a held PTT would call tx_state and repaint every millisecond. */
         if (g.denied) {
-            if (key == APP_KEY_PTT || isSide(key) || paddles(key)) {
+            if (key == APP_KEY_PTT || paddles(key)) {
                 resetUiInput();
                 serviceOneMs();
                 continue;
@@ -1083,7 +1110,9 @@ void app_main(const app_api_t *api)
 
     disarm();
     A->bk_write(REG_XTAL, g.xtalBase);
+#if CW_KEYER_USB
     portSet(false);
+#endif
     saveConfig();
     A->set_af(APP_AF_MUTE);
     A->audio_path(false);
