@@ -59,7 +59,8 @@ def ecef_velocity(latitude, longitude, east, north, up):
     return tuple(round(value * 100) for value in v)
 
 
-def test_frame():
+def base_frame(serial, battery):
+    """Sync, frame type and the STATUS block shared by both layouts."""
     frame = bytearray(FRAME_LEN)
     frame[:8] = CLEAR_SYNC
     frame[0x38] = 0x0F
@@ -68,20 +69,59 @@ def test_frame():
     frame[status] = 0x79
     frame[status + 1] = 40
     frame[status + 2:status + 4] = (1234).to_bytes(2, "little")
-    frame[status + 4:status + 12] = b"S1234567"
-    frame[status + 12] = 29                     # 0x45: battery 2.9 V
+    frame[status + 4:status + 12] = serial
+    frame[status + 12] = battery                # 0x45: battery, 0.1 V
     finish_block(frame, status)
+    return frame
+
+
+def put_ecef(frame, offset, position, velocity):
+    """ECEF position (cm) and velocity (cm/s), the start of both position blocks."""
+    for index, value in enumerate(ecef(*position)):
+        frame[offset + index * 4:offset + 4 + index * 4] = value.to_bytes(4, "little", signed=True)
+    for index, value in enumerate(ecef_velocity(position[0], position[1], *velocity)):
+        frame[offset + 12 + index * 2:offset + 14 + index * 2] = value.to_bytes(2, "little", signed=True)
+
+
+def test_frame():
+    """Classic layout: GPS position block 0x7B at 0x112."""
+    frame = base_frame(b"S1234567", 29)
 
     gps = 0x112
     frame[gps] = 0x7B
     frame[gps + 1] = 21
-    for index, value in enumerate(ecef(48.8, 2.3, 1200)):
-        frame[gps + 2 + index * 4:gps + 6 + index * 4] = value.to_bytes(4, "little", signed=True)
     # Climbing at 5.2 m/s with the wind carrying it east-south-east.
-    for index, value in enumerate(ecef_velocity(48.8, 2.3, 8.0, -3.0, 5.2)):
-        frame[gps + 14 + index * 2:gps + 16 + index * 2] = value.to_bytes(2, "little", signed=True)
+    put_ecef(frame, gps + 2, (48.8, 2.3, 1200), (8.0, -3.0, 5.2))
     frame[gps + 20] = 8
     finish_block(frame, gps)
+    return frame
+
+
+GNSS = 0xA1
+
+
+def gnss_frame():
+    """Multi-GNSS firmware layout (rs41mod: fw 0x50dd): no classic GPS
+    blocks; PTU 0x7A at 0x65, 0x96 (likely an authentication tag) at 0x93,
+    position/date/time 0x82 at 0xA1, satellites 0x83 at 0xCB, padding 0x76
+    at 0xF8 up to the end of the 320 bytes."""
+    frame = base_frame(b"X7654321", 31)
+
+    def block(offset, ident, length, payload=b""):
+        frame[offset] = ident
+        frame[offset + 1] = length
+        frame[offset + 2:offset + 2 + len(payload)] = payload
+        finish_block(frame, offset)
+
+    block(0x65, 0x7A, 42)
+    block(0x93, 0x96, 10, bytes(range(0x51, 0x5B)))
+    # Falling at 12.3 m/s after the burst, the wind carrying it north-west.
+    put_ecef(frame, GNSS + 2, (45.2, 5.7, 2500), (-6.0, 4.0, -12.3))
+    frame[GNSS + 20:GNSS + 22] = (2026).to_bytes(2, "little")
+    frame[GNSS + 22:GNSS + 28] = bytes((10, 19, 12, 0, 0, 0))
+    block(GNSS, 0x82, 38, frame[GNSS + 2:GNSS + 40])
+    block(0xCB, 0x83, 41)
+    block(0xF8, 0x76, FRAME_LEN - 0xF8 - 4)
     return frame
 
 
@@ -128,16 +168,30 @@ def write_sub(path, bits, frequency):
     return runs
 
 
+def corrupt(frame, offset):
+    bad = bytearray(frame)
+    bad[offset] ^= 1
+    return bad
+
+
 def test_cases():
+    """Classic layout (rs41_*) and multi-GNSS layout (rs41_gnss_*)."""
     valid = test_frame()
-    bad_crc = bytearray(valid)
-    bad_crc[0x39 + 4] ^= 1
+    gnss = gnss_frame()
     bits = wire_bits(valid)
+    gnss_bits = wire_bits(gnss)
     return {
         "valid": (bits, "S1234567, 48.8000N 2.3000E, ALT about 1200m VS+5.2, "
                            "BAT 2.9V, HS 9m/s HDG 110 or 111"),
         "inverted": ([1 ^ bit for bit in bits], "same frame, inverted RF polarity"),
-        "badcrc": (wire_bits(bad_crc), "rejected: FRAME must not increment"),
+        "badcrc": (wire_bits(corrupt(valid, 0x39 + 4)), "rejected: FRAME must not increment"),
+        "badpos": (wire_bits(corrupt(valid, 0x112 + 4)),
+                   "S1234567, BAT 2.9V, FRAME increments, no position"),
+        "gnss_valid": (gnss_bits, "X7654321, 45.2000N 5.7000E, ALT about 2500m VS-12.3, "
+                                  "BAT 3.1V, HS 7m/s HDG 303 or 304"),
+        "gnss_inverted": ([1 ^ bit for bit in gnss_bits], "same frame, inverted RF polarity"),
+        "gnss_badpos": (wire_bits(corrupt(gnss, GNSS + 4)),
+                        "X7654321, BAT 3.1V, FRAME increments, no position"),
     }
 
 

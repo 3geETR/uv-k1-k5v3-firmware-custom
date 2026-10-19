@@ -12,8 +12,10 @@ Demod (per ADC sample), as decrs41.c:
   DC removal (Q8, 1/256), peak of |y| (attack 1/4, decay 1/256)
   two hysteresis slicers: the level flips when y passes +/- num/8 of the peak
   (num = 2, 4) and holds in between, whatever the droop of the high-pass
-  each slicer: DPLL pulled by its level changes (target 3/4, gain 1/4), a bit
-  per wrap, the last 64 bits compared with the sync word or its complement
+  each slicer: DPLL pulled by its level changes (target 3/4, gain 1/4) that
+  also learns the bit rate (step gain 1/256, within +/-5 %: the MCU clock is
+  off by a few percent on some radios), a bit per wrap, the last 64 bits
+  compared with the sync word or its complement
   (<= 6 wrong bits), then 2496 data bits.
 
 The previous demodulator (sign of the integrated level, sync accepted on a
@@ -39,6 +41,7 @@ DEV = 2380.0              # Flipper preset 2FSKDev238Async
 
 SYNC0, SYNC1 = 0x11CAB610, 0xF8129622
 STEP, PLL_CTR, PLL_SHIFT, SYNC_ERR = 16384, 49152, 2, 6
+FREQ_SHIFT, STEP_MAX = 8, 820
 NUMS = (2, 4)
 M32 = 0xFFFFFFFF
 
@@ -115,7 +118,7 @@ def near64(a, b):
 
 class Slicer:
     def __init__(self, num):
-        self.num, self.lev, self.phase = num, 0, 0
+        self.num, self.lev, self.phase, self.step = num, 0, 0, STEP
         self.sr0 = self.sr1 = 0
         self.rearm()
 
@@ -152,7 +155,7 @@ class Slicer:
 
 class Demod:
     def __init__(self, nums=NUMS):
-        self.dc, self.amp = -1, 0
+        self.dc, self.amp, self.yp = -1, 0, 0
         self.sl = [Slicer(n) for n in nums]
 
     def rearm(self):
@@ -164,7 +167,9 @@ class Demod:
         if self.dc < 0:
             self.dc = xq
         self.dc += (xq - self.dc) >> 8
-        y = xq - self.dc
+        y0 = xq - self.dc
+        y = y0 + ((y0 - self.yp) >> 1)     # edge lift, as decrs41.c
+        self.yp = y0
         a = -y if y < 0 else y
         if a > self.amp:
             self.amp += (a - self.amp) >> 2
@@ -181,12 +186,13 @@ class Demod:
                 lev = 1
             elif y < -t:
                 lev = 0
-            s.phase += STEP
+            s.phase += s.step
             if lev != s.lev:
                 err = PLL_CTR - s.phase
                 if err > 32768:
                     err -= 65536
                 s.phase += err >> PLL_SHIFT
+                s.step = min(max(s.step + (err >> FREQ_SHIFT), STEP - STEP_MAX), STEP + STEP_MAX)
                 s.lev = lev
             if s.phase < 65536:
                 continue
@@ -303,17 +309,20 @@ def frames(adc, ref, dm):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ref = wire_of(F.test_frame())
+    ref_gnss = wire_of(F.gnss_frame())
     hps = (30, 300, 700, 1000, 1500)
     print("Flipper files, STATUS frames read (badcrc must read 0)")
-    print("%-9s %-5s %s" % ("file", "demod", "  ".join("hp%-5d" % h for h in hps)))
-    for name in ("valid", "inverted", "badcrc"):
+    print("%-13s %-5s %s" % ("file", "demod", "  ".join("hp%-5d" % h for h in hps)))
+    for name in ("valid", "inverted", "badcrc", "badpos",
+                 "gnss_valid", "gnss_inverted", "gnss_badpos"):
         w = sub_wave(os.path.join(here, "flipper", "rs41_%s.sub" % name))
+        r = ref_gnss if name.startswith("gnss") else ref
         for label, mk in (("new", Demod), ("old", OldDemod)):
-            row = [frames(channel(w, hp=hp, seed=hp), ref, mk()) for hp in hps]
-            print("%-9s %-5s %s" % (name, label, "  ".join("%-7d" % v for v in row)))
+            row = [frames(channel(w, hp=hp, seed=hp), r, mk()) for hp in hps]
+            print("%-13s %-5s %s" % (name, label, "  ".join("%-7d" % v for v in row)))
     print()
     print("noise and clock sweep, new demod: per corner, noise 0/1000/1500,"
-          " each ppm -1%,0,+1% x polarity (S = read)")
+          " each clock error -3%,-1%,0,+1%,+3% x polarity (S = read)")
     bits = F.wire_bits(F.test_frame())
     lead = [DEV] * int(0.1 * FS_SIM)
     spb = FS_SIM / 4800
@@ -321,7 +330,7 @@ def main():
         cols = []
         for noise in (0, 1000, 1500):
             c = ""
-            for ppm in (-10000, 0, 10000):
+            for ppm in (-30000, -10000, 0, 10000, 30000):
                 for inv in (0, 1):
                     seq = [i & 1 for i in range(320)] + [b ^ inv for b in bits]
                     sig = lead + [(-DEV if seq[int(i / spb)] else DEV)

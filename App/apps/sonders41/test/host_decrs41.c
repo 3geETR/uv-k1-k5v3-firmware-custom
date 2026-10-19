@@ -69,11 +69,12 @@ static void finishBlock(uint8_t *f, uint16_t pos)
     f[pos + 3u + len] = (uint8_t)(crc >> 8);
 }
 
-static void makeFrame(uint8_t *clear, uint8_t *wire)
+/* Sync and the STATUS block shared by both layouts. */
+static void startFrame(uint8_t *clear, const char *serial, uint8_t battery)
 {
     static const uint8_t sync[8] =
         { 0x86,0x35,0xF4,0x40,0x93,0xDF,0x1A,0x60 };
-    uint8_t *status, *gps;
+    uint8_t *status;
     memset(clear, 0, RS41_FRAME_LEN);
     memcpy(clear, sync, sizeof sync);
 
@@ -82,12 +83,22 @@ static void makeFrame(uint8_t *clear, uint8_t *wire)
     status[1] = 40;
     status[2] = 0x34;
     status[3] = 0x12;
-    memcpy(status + 4, "S1234567", 8);
-    status[12] = 29;                   /* 0x45: battery 2.9 V */
+    memcpy(status + 4, serial, 8);
+    status[12] = battery;              /* 0x45: battery, 0.1 V */
     status[25] = 0;
     finishBlock(clear, 0x39);
+}
 
-    gps = clear + 0x112;
+static void whiten(const uint8_t *clear, uint8_t *wire)
+{
+    for (uint16_t i = 0; i < RS41_FRAME_LEN; i++)
+        wire[i] = clear[i] ^ MASK[i & 63u];
+}
+
+/* Classic GPS block 0x7B at 0x112. */
+static void putGps(uint8_t *clear)
+{
+    uint8_t *gps = clear + 0x112;
     gps[0] = 0x7B;
     gps[1] = 21;
     /* WGS84 ECEF for 48.8 N, 2.3 E at 1200 m, in centimetres. */
@@ -100,9 +111,53 @@ static void makeFrame(uint8_t *clear, uint8_t *wire)
     put16(gps + 18, 194);
     gps[20] = 8;
     finishBlock(clear, 0x112);
+}
 
-    for (uint16_t i = 0; i < RS41_FRAME_LEN; i++)
-        wire[i] = clear[i] ^ MASK[i & 63u];
+/* Multi-GNSS block 0x82 at 0xA1 (rs41mod: 0x8226, fw 0x50dd). */
+static void putGnss(uint8_t *clear)
+{
+    uint8_t *gnss = clear + 0xA1;
+    gnss[0] = 0x82;
+    gnss[1] = 38;
+    /* WGS84 ECEF for 45.2 N, 5.7 E at 2500 m, in centimetres. */
+    put32(gnss + 2, 448134061);
+    put32(gnss + 6, 44729726);
+    put32(gnss + 10, 450481156);
+    /* ECEF velocity in cm/s: 12.3 m/s down, 6 m/s west, 4 m/s north. */
+    put16(gnss + 14, -1085);
+    put16(gnss + 16, -711);
+    put16(gnss + 18, -591);
+    gnss[20] = (uint8_t)2026u;         /* UTC date and time, unread */
+    gnss[21] = (uint8_t)(2026u >> 8);
+    gnss[22] = 10;
+    gnss[23] = 19;
+    gnss[24] = 12;
+    finishBlock(clear, 0xA1);
+}
+
+static void makeFrame(uint8_t *clear, uint8_t *wire)
+{
+    startFrame(clear, "S1234567", 29);
+    putGps(clear);
+    whiten(clear, wire);
+}
+
+/* Multi-GNSS layout: PTU 0x7A, 0x96 (likely an authentication tag), 0x82
+ * position, 0x83 satellites, 0x76 padding to the end; no classic GPS block. */
+static void makeGnssFrame(uint8_t *clear, uint8_t *wire)
+{
+    static const uint8_t blocks[][3] = {
+        { 0x65, 0x7A, 42 }, { 0x93, 0x96, 10 }, { 0xCB, 0x83, 41 },
+        { 0xF8, 0x76, RS41_FRAME_LEN - 0xF8 - 4 }
+    };
+    startFrame(clear, "X7654321", 31);
+    for (unsigned i = 0; i < sizeof blocks / sizeof blocks[0]; i++) {
+        clear[blocks[i][0]] = blocks[i][1];
+        clear[blocks[i][0] + 1u] = blocks[i][2];
+        finishBlock(clear, blocks[i][0]);
+    }
+    putGnss(clear);
+    whiten(clear, wire);
 }
 
 static void loadWire(decrs41_t *d, const uint8_t *wire)
@@ -148,6 +203,76 @@ static void checkParse(void)
     wire[0x39 + 4] ^= 1u;
     loadWire(&d, wire);
     assert(!decrs41_parse(&d, &info));
+
+    /* Classic block ID broken: the multi-GNSS offset holds no 0x82 block. */
+    makeFrame(clear, wire);
+    initDec(&d);
+    wire[0x112] ^= 1u;
+    loadWire(&d, wire);
+    memset(&info, 0, sizeof info);
+    assert(decrs41_parse(&d, &info));
+    assert(info.flags == SONDE_HAS_ID);
+
+    /* Both position blocks valid: the classic one is read, as before. */
+    startFrame(clear, "S1234567", 29);
+    putGps(clear);
+    putGnss(clear);
+    whiten(clear, wire);
+    initDec(&d);
+    loadWire(&d, wire);
+    memset(&info, 0, sizeof info);
+    assert(decrs41_parse(&d, &info));
+    assert(info.flags & SONDE_HAS_POS);
+    assert(info.latS > 17567900 && info.latS < 17568100);
+}
+
+static void checkGnss(void)
+{
+    uint8_t clear[RS41_FRAME_LEN], wire[RS41_FRAME_LEN];
+    decrs41_t d;
+    sonde_info_t info = {0};
+    makeGnssFrame(clear, wire);
+    initDec(&d);
+    loadWire(&d, wire);
+    assert(decrs41_parse(&d, &info));
+    assert(!strcmp(info.id, "X7654321"));
+    assert((info.flags & (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT)) ==
+           (SONDE_HAS_ID | SONDE_HAS_POS | SONDE_HAS_ALT));
+    /* 45.2 N, 5.7 E, 2500 m: within 1" (31 m) and 5 m */
+    assert(info.latS > 16271900 && info.latS < 16272100);
+    assert(info.lonS > 2051900 && info.lonS < 2052100);
+    assert(info.alt_m >= 2495 && info.alt_m <= 2505);
+    assert(info.vs_dm >= -124 && info.vs_dm <= -122);
+    /* 6 m/s west, 4 m/s north: 7.2 m/s towards 303.7 degrees */
+    assert(info.hs_ms == 7);
+    assert(info.hdg >= 302 && info.hdg <= 305);
+    assert(info.batt_dv == 31u);
+
+    /* A broken 0x82 block: the frame still counts, without a position. */
+    initDec(&d);
+    wire[0xA1 + 4] ^= 1u;
+    loadWire(&d, wire);
+    memset(&info, 0, sizeof info);
+    assert(decrs41_parse(&d, &info));
+    assert(info.flags == SONDE_HAS_ID);
+}
+
+/* Key polls only between the parsed blocks, 3 bytes of margin each side:
+ * after STATUS (0x39..0x65), around the 0x82 block (0xA1..0xCB), before the
+ * classic GPS block (0x112). */
+static void checkHold(void)
+{
+    decrs41_t d;
+    initDec(&d);
+    assert(decrs41_holdOk(&d));        /* both slicers searching */
+    d.sl[0].state = 1u;                /* ST_DATA */
+    for (uint16_t b = 8; b < RS41_FRAME_LEN; b++) {
+        bool in = (b >= 0x68u && b < 0x9Eu) || (b >= 0xCEu && b < 0x10Fu);
+        d.sl[0].nbit = (uint16_t)(b * 8u);
+        assert(decrs41_holdOk(&d) == in);
+        d.sl[0].nbit = (uint16_t)(b * 8u + 7u);
+        assert(decrs41_holdOk(&d) == in);
+    }
 }
 
 static void feedBit(decrs41_t *d, uint8_t bit, bool inverted)
@@ -156,12 +281,13 @@ static void feedBit(decrs41_t *d, uint8_t bit, bool inverted)
     for (uint8_t i = 0; i < 4u; i++) decrs41_push(d, sample);
 }
 
-static void checkDemod(bool inverted)
+static void checkDemod(bool inverted, bool gnss)
 {
     uint8_t clear[RS41_FRAME_LEN], wire[RS41_FRAME_LEN];
     decrs41_t d;
     sonde_info_t info = {0};
-    makeFrame(clear, wire);
+    if (gnss) makeGnssFrame(clear, wire);
+    else makeFrame(clear, wire);
     initDec(&d);
     for (uint16_t i = 0; i < 320u; i++) feedBit(&d, i & 1u, inverted);
     for (uint16_t i = 0; i < RS41_FRAME_LEN; i++)
@@ -172,6 +298,31 @@ static void checkDemod(bool inverted)
     for (uint8_t i = 0; i < 8u; i++) done |= decrs41_push(&d, inverted ? 800u : 3200u);
     assert(done);
     assert(decrs41_parse(&d, &info));
+    assert(!strcmp(info.id, gnss ? "X7654321" : "S1234567"));
+    assert(info.flags & SONDE_HAS_POS);
+}
+
+/* The radio's clock off by permille/1000: a bit lasts 4 (1 + e) samples. The
+ * DPLL learns that rate; a phase-only one read wrong bits from 2 % on. */
+static void checkDemodClock(int permille)
+{
+    uint8_t clear[RS41_FRAME_LEN], wire[RS41_FRAME_LEN];
+    const unsigned nbits = 320u + RS41_FRAME_LEN * 8u;
+    const unsigned spb = (unsigned)(4000 + 4 * permille);   /* samples per bit x 1000 */
+    decrs41_t d;
+    sonde_info_t info = {0};
+    bool done = false;
+    makeFrame(clear, wire);
+    initDec(&d);
+    for (unsigned n = 0; !done; n++) {
+        unsigned k = n * 1000u / spb;   /* the bit this sample falls in */
+        uint8_t bit = k < 320u ? (uint8_t)(k & 1u)
+                    : k < nbits ? (uint8_t)((wire[(k - 320u) >> 3] >> ((k - 320u) & 7u)) & 1u)
+                    : 1u;
+        done = decrs41_push(&d, bit ? 3200u : 800u);
+        assert(k < nbits + 4u);
+    }
+    assert(decrs41_parse(&d, &info));
     assert(!strcmp(info.id, "S1234567"));
     assert(info.flags & SONDE_HAS_POS);
 }
@@ -179,8 +330,14 @@ static void checkDemod(bool inverted)
 int main(void)
 {
     checkParse();
-    checkDemod(false);
-    checkDemod(true);
+    checkGnss();
+    checkHold();
+    checkDemod(false, false);
+    checkDemod(true, false);
+    checkDemod(false, true);
+    checkDemod(true, true);
+    checkDemodClock(-30);
+    checkDemodClock(30);
     puts("RS41 decoder tests passed");
     return 0;
 }
