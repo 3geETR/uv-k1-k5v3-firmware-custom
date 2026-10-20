@@ -17,7 +17,7 @@
 /*
  * POCSAG RX - receives POCSAG pager transmissions at 1200 bauds (as the
  * amateur DAPNET network sends them) and at 512 bauds, both at once, in
- * software, and keeps the last five pages, shown one at a time: address (RIC),
+ * software, and keeps the last ten pages, shown one at a time: address (RIC),
  * text, function. The rate of each preamble heard (512, 1200 or 2400, the
  * last not decoded) is shown with key 3. Tune the VFO (FM; 439.9875 MHz for
  * DAPNET, or 433.650 MHz for the Flipper Zero bench files of
@@ -116,7 +116,9 @@ _Static_assert((BOX_512 & (BOX_512 - 1u)) == 0u && BOX_512 >= 4u,
 #define GAP         0x7Fu  /* a character lost with a bad codeword: shown as
                               '?', filled from another slicer's copy        */
 #define BAD_RUN     3u     /* bad codewords in a row that end a page        */
-#define HISTORY     5u
+#define HISTORY     10u    /* pages kept: 100 B of app_main's stack each (a
+                              page_t and its pointer); two digits in the
+                              "2/10" capsule at most */
 
 typedef struct {
     uint32_t ric;                      /* 21-bit address                          */
@@ -124,7 +126,9 @@ typedef struct {
     uint32_t at;                       /* sample its address codeword came at     */
     int16_t  rssi;
     uint8_t  func, len;
-    char     text[MSG_MAX];
+    char     text[MSG_MAX];                /* text[0] while len = 0: 1 = characters
+                                              came but none was read ("Text Lost"),
+                                              0 = an address alone ("Tone Only") */
 } page_t;
 
 /* one slicer: its decision, DPLL, batch decoder, the page being read */
@@ -212,8 +216,13 @@ static char *put2(char *o,uint32_t v){ *o++=(char)('0'+sub(&v,10u)); *o++=(char)
                               text (x >= 83): BMP_TAIL in the assets, both in one
                               read. No "WAIT" capsule before it here: until a first
                               page the bottom line shows the decoder's counters */
+#define TONE_X      45u    /* key 4 on: the bell (BMP_TONE, x = 45-52), centred
+                              between the title capsule (x <= 38) and SPK_X */
+#define NOTEXT_X    ((128u-7u*NOTEXT_CHARS)/2u)   /* "Tone Only" / "Text Lost"
+                              centred (7 px a character): text from x = 32,
+                              its capsule x = 31-95 */
 #define CAPS_END    127u   /* last column of the capsules at the right of the
-                              address (x >= 89 with "65535" and "2/5") */
+                              address (x >= 81 with "65535" and "10/10") */
 /* The text under the address, in one of two views (key *), as APRS RX:
  * - normal (g.cw = 0): 18 characters per row on lines 1-3, scrolled by rows;
  * - compact (g.cw = CW_COMPACT): 32 tiny characters per row, 6 px apart from
@@ -234,16 +243,17 @@ static void closePage(sl_t *m){
     if(!m->has) return;
     m->has=0;
     const uint8_t *t=(const uint8_t *)m->text;
-    unsigned n=m->len, gaps=0;
+    unsigned n=m->len, gaps=0, lost=0;
     /* the marks of bad words after the last character were the end of the page
-     * itself; so is the padding of a numeric page */
-    while(n && (t[n-1u]==GAP || (m->func==FUNC_NUMERIC && t[n-1u]==' '))) n--;
+     * itself; so is the padding of a numeric page. Nothing left after a mark:
+     * the text was lost, not absent. */
+    while(n && (t[n-1u]==GAP || (m->func==FUNC_NUMERIC && t[n-1u]==' '))) lost|=t[--n]==GAP;
     for(unsigned i=0;i<n;i++) gaps+=t[i]==GAP;
-    /* An address alone is dropped unless key 4 keeps the tone-only pages: a
-     * slicer that slipped a bit reads shifted codewords, which are valid ones
-     * as often as not (the code is cyclic), and they come out as addresses
-     * without text. A copy with more characters lost than read is always
-     * dropped. */
+    /* A page without text is dropped unless key 4 keeps them: a slicer that
+     * slipped a bit reads shifted codewords, which are valid ones as often as
+     * not (the code is cyclic), and they come out as addresses without text.
+     * A copy with more characters lost than read is always dropped; one with
+     * nothing read at all is a page without text ("Text Lost"). */
     if((!n && !g.tones) || 2u*gaps>n) return;
     g.redraw|=REDRAW_FRAME;
     for(unsigned j=0;j<g.count;j++){
@@ -268,6 +278,7 @@ static void closePage(sl_t *m){
     p->t=A->ticks_ms();
     p->len=(uint8_t)n;
     memcpy(p->text,t,n);
+    if(!n) p->text[0]=(char)lost;          /* which of the two draw() shows */
     g.cur=0;                               /* show it, from its first row */
     g.led=LED_STEPS;                       /* and blink: listen() steps it */
     g.top=0;
@@ -459,19 +470,21 @@ static void draw(void){
     A->status_clear();
     A->print_inverse(s+T_TITLE,2,0,true,true,(uint8_t)(2u+T_TITLE_CHARS*4u));
     A->draw_battery();
-    if(g.tones) A->print_inverse(s+T_TFLAG,(uint8_t)(6u+T_TITLE_CHARS*4u),0,true,true,(uint8_t)(10u+T_TITLE_CHARS*4u));   /* key 4 on */
+    if(g.tones) A->asset_read(BMP_TONE,A->status_line+TONE_X,BMP_TONE_LEN);   /* key 4 on */
 
     if(g.count){
         /* the address in bold on line 0, and at its right two capsules as in
-         * APRS RX: once several pages are kept, "2/5" at the edge (the page
-         * shown / the pages kept, 1 = newest), left of it the pages received */
+         * APRS RX: once several pages are kept, "2/10" at the edge (the page
+         * shown / the pages kept, 1 = newest), left of it the pages received.
+         * A capsule of n characters starts its text at end - 4n. */
         *puti(str,(int32_t)p->ric)='\0';
         A->print_bold(str,0,0,0);
         unsigned capsEnd=CAPS_END;
         if(g.count>1u){
-            o=str; *o++=(char)('1'+g.cur); *o++='/'; *o++=(char)('0'+g.count); *o='\0';
-            A->print_inverse(str,CAPS_END-12u,0,false,true,CAPS_END);
-            capsEnd-=16u;                 /* that capsule and a blank column */
+            o=puti(str,g.cur+1); *o++='/'; o=puti(o,g.count); *o='\0';
+            capsEnd-=4u*(unsigned)(o-str);
+            A->print_inverse(str,(uint8_t)capsEnd,0,false,true,CAPS_END);
+            capsEnd-=4u;                  /* that capsule and a blank column */
         }
         o=puti(str,g.nOk); *o='\0';
         A->print_inverse(str,(uint8_t)(capsEnd-4u*(unsigned)(o-str)),0,false,true,(uint8_t)capsEnd);
@@ -491,7 +504,18 @@ static void draw(void){
             if(g.cw){ if(r<4u) A->print_tiny(str,0,(uint8_t)(8u+r*6u),false,true); }
             else if(r<ROWS) A->print_normal(str,0,0,(uint8_t)(1u+r));
         }
-        if(!p->len) A->print_normal(s+T_TONE,0,0,1);   /* an address alone */
+        if(!p->len){
+            /* No text: "Tone Only" (an address alone) or "Text Lost"
+             * (characters came, none was read) in a capsule of the normal
+             * font, centred under the address. Its rows are bit 7 of line 1
+             * and the whole of line 2: a blank row above and below the 7-row
+             * characters. Its ends are cut as print_inverse's. */
+            unsigned x=NOTEXT_X;
+            A->print_normal(s+(p->text[0]?T_LOST:T_TONE),(uint8_t)x,0,2);
+            b[256u+x-1u]^=0x7Fu;
+            for(;x<NOTEXT_X+7u*NOTEXT_CHARS;x++){ b[128u+x]^=0x80u; b[256u+x]^=0xFFu; }
+            b[256u+x]^=0x7Fu;
+        }
         if(!g.cw && rows>ROWS) lim=rows-ROWS;
     }
     g.lim=(uint8_t)lim;

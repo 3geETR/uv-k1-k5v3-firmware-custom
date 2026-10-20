@@ -12,6 +12,7 @@ rate of the last preamble heard, 2400 bauds included (told, not decoded).
 | Format (`test/pocsag.py`) | Self-tested: the sync and idle codewords come out of the BCH encoder, pages round-trip, one wrong bit per codeword is corrected, two are detected |
 | Receive model (`test/model_rx.py`) | See "Model results" below |
 | Radio app (`pocsagrx_app.c`) | v0.2 (three hysteresis slicers). v0.1 on the radio (2026-10-13): with feedback slicers only, the Flipper transmission was heard but nothing decoded, not even a sync codeword. **With the hysteresis slicers, every Flipper file decodes as expected** (`alpha`, `long`, `gap` with its `?` marks, `same`, `two`, ...), and key 3 read `syn 2 ok 0 0 0 32 32` for the five slicers of that build: only the 1/4 and 1/2 hysteresis ones. The feedback slicers and the 1/8 one were then removed and a 3/8 one added: that is v0.2, **checked on the radio the same day** with `alpha` (key 3 counters), `gap` and `same` |
+| v0.5: 10 pages, bell mark, Text Lost | 10 pages kept instead of 5 (100 B of stack each: 1000 B for the 10), the "page shown / pages kept" capsule on two digits (`10/10`). Key 4 on shows a bell between the title and the speaker icon in place of the `T` capsule. A page without text shows `Tone Only` in a capsule under the address, or `Text Lost` when its message codewords came but none could be read (v0.4 showed those as tone-only). Not built or checked on the radio yet |
 | v0.4: tone-only pages | Key 4 keeps the pages without text (saved, off by default). Model: with it off, the results are unchanged; with it on, the pages with text are the same in all 264 runs, 3 false tone-only pages appear, and 90/90 real tone-only transmissions (alone, two, or before a text page; 1200 and 512 bauds; clock 1 % off) decode exactly. 60 s of noise gives nothing. **Checked on the radio** (UV-K1) with `pocsag_tone.sub` and `pocsag_tonemix.sub`, key 4 on and off |
 | v0.3: 512 bauds and preamble rate | A 512-baud lane (8-sample box, its own three slicers) runs beside the 1200 one, and key 3 shows the rate of the last preamble. The 512-baud lane remains model-only (see "Model results"); Flipper files `pocsag512_*.sub` and `pocsag2400_alpha.sub` |
 | On air | Not tested: no DAPNET transmitter heard yet |
@@ -62,12 +63,12 @@ screen (a page, a key, or every 5 s); key 2 resets it.
 
 | Key | Action |
 |---|---|
-| UP / DOWN | Scroll the text a row when it overflows (normal view); at either end, the newer / older page (UV-K1: LEFT / RIGHT). 5 pages kept |
+| UP / DOWN | Scroll the text a row when it overflows (normal view); at either end, the newer / older page (UV-K1: LEFT / RIGHT). 10 pages kept |
 | * | Normal view (18 characters a row, 3 rows) / compact view (32 tiny characters a row: a whole 80-character page); saved |
 | 1 | Speaker on / off (saved, off by default). Not gated by the squelch, as EPIRB 406: the hiss is heard between transmissions, and a transmission as the raw buzz it is |
 | 2 | Clear the pages and the counters |
 | 3 | After a page: toggle level and age / preamble rate and lane counters. Before the first page, diagnostics are already shown |
-| 4 | Keep the pages without text (tone-only pages) on / off (saved, off by default). While on, a `T` follows the title; such a page shows `(tone only)` in place of its text |
+| 4 | Keep the pages without text (tone-only pages) on / off (saved, off by default). While on, a bell sits between the title and the speaker icon; such a page shows `Tone Only` in a capsule under the address, or `Text Lost` when characters came but none could be read |
 | EXIT | Quit |
 
 During a transmission the keys are read twice a second only, once a second at
@@ -88,7 +89,9 @@ During a transmission the keys are read twice a second only, once a second at
   valid ones, and they come out as addresses without text. With key 4 on, the
   model (see "Model results") shows 3 such false pages in 264 runs of its
   cases (two with the clock 1 % off, one at the 1500 Hz high-pass corner), and
-  every real tone-only page of its 90 runs.
+  every real tone-only page of its 90 runs. A page whose message codewords all
+  came bad shows `Text Lost`; so does a tone-only page whose next codeword (an
+  idle one) came bad, as a bad codeword cannot tell which it was.
 - **With a clock 1 % off** (the MCU runs on its internal oscillator) the model
   still shows, about once in three transmissions, a wrong character or a junk
   page of a few characters from a slicer that slipped.
@@ -115,7 +118,7 @@ python3 test/flipper_pocsag.py test/flipper --baud 2400 --names alpha
 | `pocsag_inverted.sub` | Same as alpha: the other discriminator polarity |
 | `pocsag_biterr.sub` | Same as alpha: one wrong bit in every other codeword, corrected |
 | `pocsag_gap.sub` | The long page with one codeword destroyed: `The q???? brown fox ...` |
-| `pocsag_tone.sub` | A tone-only page: `1234567`, func 1, no text. Shown as `(tone only)` with key 4 on, nothing with key 4 off |
+| `pocsag_tone.sub` | A tone-only page: `1234567`, func 1, no text. Shown as `Tone Only` with key 4 on, nothing with key 4 off |
 | `pocsag_tonemix.sub` | A tone-only page `1234560` (func 0), then `1045677`, `After a tone-only page`: with key 4 off, only the second one |
 
 The same tests at 512 bauds are `pocsag512_*.sub` (3.4 s each): the same

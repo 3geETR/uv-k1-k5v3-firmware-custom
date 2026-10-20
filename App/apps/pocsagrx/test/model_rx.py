@@ -296,17 +296,21 @@ class Slicer:
     def close(self):
         if self.ric >= 0:
             t = self.text
+            lost = False
             # the marks of bad words after the last character were the end of
-            # the page itself; so is the padding of a numeric page
+            # the page itself; so is the padding of a numeric page. Nothing
+            # left after a mark: the text was lost, not absent.
             while t and (t[-1] == GAP or (self.func == pocsag.FUNC_NUMERIC and t[-1] == 32)):
+                lost |= t[-1] == GAP
                 t = t[:-1]
-            # An address alone is dropped unless tone-only pages are kept
-            # (key 4): a slicer that slipped a bit reads shifted codewords,
-            # which are valid ones as often as not (the code is cyclic), and
-            # they come out as addresses without text. A copy with more
-            # characters lost than read is always dropped.
+            # A page without text is dropped unless key 4 keeps them: a slicer
+            # that slipped a bit reads shifted codewords, which are valid ones
+            # as often as not (the code is cyclic), and they come out as
+            # addresses without text. A copy with more characters lost than
+            # read is always dropped; one with nothing read at all is a page
+            # without text ("Text Lost").
             if (t or self.dm.tones) and 2 * t.count(GAP) <= len(t):
-                self.dm.found(self.ric, self.func, t, self.at, self.lane.dup)
+                self.dm.found(self.ric, self.func, t, self.at, self.lane.dup, lost)
         self.ric = -1
 
 
@@ -389,9 +393,10 @@ class Demod:
         self.sl = [s for ln in self.lanes for s in ln.sl]
         self.rf = RateFinder()
         self.pages = []; self.when = []            # pages, the sample the address of each came at
+        self.lost = []                             # per page without text: "Text Lost", not "Tone Only"
         self.n = 0                                 # sample count
 
-    def found(self, ric, func, text, at, dup):
+    def found(self, ric, func, text, at, dup, lost=False):
         # The slicers read the same transmission: each gives the same
         # page. What tells the same page from another one is not its text (two
         # pages may share theirs, or its beginning) but where it sits: its
@@ -411,6 +416,7 @@ class Demod:
             return
         self.pages.append((ric, func, list(text)))
         self.when.append(at)
+        self.lost.append(lost and not text)
 
     def skip(self, n):
         """n samples were not taken (keys, screen): the bit clocks run on and the
