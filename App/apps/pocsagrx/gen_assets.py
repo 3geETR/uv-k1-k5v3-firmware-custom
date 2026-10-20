@@ -21,6 +21,8 @@ UI = [
     ("T_LAST",   "  last "),                # 30 characters at most (a tiny row holds 32)
     ("T_PRE",    "pre "),                   # until a first page, or key 3:
                                             # "pre 512 1200:0/0 512:3/96"
+    ("T_TONE",   "(tone only)"),            # key 4: a page without text
+    ("T_TFLAG",  "T"),                      # key 4 on, after the title
 ]
 
 a = Assets("POCSAGRX")
