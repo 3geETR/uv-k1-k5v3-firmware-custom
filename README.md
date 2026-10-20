@@ -136,7 +136,7 @@ remains available for navigation and operation.
 
 ### Overlay applications and APRS
 
-Labs can store up to 48 applications from the current collection of 35 in
+Labs can store up to 48 applications from the current collection of 36 in
 external Flash. Each app is loaded into a dedicated 4 KiB RAM overlay only
 while it is running, while larger read-only assets such as text, fonts, bitmaps
 and lookup tables remain in external Flash.
@@ -149,8 +149,8 @@ The current app collection includes:
   APRS DIGI, CW Decode, CW Keyer, CW USB, SSTV, POCSAG RX, Sonde M10, Sonde M20,
   Sonde RS41 and EPIRB 406,
 - tools and diagnostics: Resistor, System Info and Flash Map,
-- games and demos: Breakout, Cube3D, Minesweeper, Plasma, Rapid Roll, Snake,
-  Sokoban, Space Impact and Tetris.
+- games and demos: Breakout, Cube3D, Hell Maze, Minesweeper, Plasma, Rapid Roll,
+  Snake, Sokoban, Space Impact and Tetris.
 
 APRS RX receives AX.25 UI frames using Bell 202 AFSK at 1200 baud, displays
 common position formats and Mic-E data, and keeps a five-frame history. APRS TX
