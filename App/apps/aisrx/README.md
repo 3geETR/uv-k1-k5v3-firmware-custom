@@ -12,7 +12,7 @@ level 3 audio-capture services; it adds no resident AIS mode or menu.
 | Reference format (`test/ais.py`) | Builds and parses message types 1, 2, 3, 5, 8 (Inland, DAC 200, FI 10), 18, 19 and 24; field layout checked against a real gpsd AIVDM report; HDLC stuffing and CRC-16/X-25 self-tested |
 | Receiver model (`test/model_rx.py`) | Radio channel as the other RAW decoders' models (0.065 LSB/Hz, high-pass corner 300-1500 Hz, 4th-order low-pass swept 3.3-8 kHz, +/-1 % clock, noise, both polarities); every case decodes with a low-pass at 5 kHz or above, most at 4 kHz, few at 3.3 kHz; no frame from 20 s of noise |
 | Flipper vectors | Twelve AIS `.sub` files (one frame each, as a ship sends one report, checked through the model channel) plus a stock-preset probe at 433.650 MHz |
-| Radio app (`aisrx_app.c`) | v0.1. During development: **decodes the Flipper files on the radio** and **receives real AIS on AIS1, 161.975 MHz** (2026-10-20); last measured build 3960 B (136 B free), the current one, with all data in one assets block, is still to be measured |
+| Radio app (`aisrx_app.c`) | v0.1. During development: **decodes the Flipper files on the radio** and **receives real AIS on AIS1, 161.975 MHz** (2026-10-20); build 3920 B (176 B free), all app data in one assets block copied onto the stack |
 
 Two design points matter, both found by giving up an early version that
 could never receive a real ship:
