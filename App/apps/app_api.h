@@ -49,7 +49,8 @@
  *      sample / close (RX audio on PA4), cycles_48mhz, draw_frequency,
  *      handoff / handoff_read, tx_prepare; the Labs system information slots
  *      become part of the layout in every build, so level 3 services have one
- *      offset */
+ *      offset; serial_read / serial_write / serial_ctl (USB-C and K-plug
+ *      serial ports, APP_CAP_SERIAL) */
 #define APP_ABI_MAJOR  1u
 #define APP_API_LEVEL  3u
 
@@ -377,7 +378,43 @@ typedef struct app_api {
      * caller that keys the PA itself (tx_set_params leaves an unshaped
      * carrier burst). On an older level 3 table, check api_size first. */
     void    (*tx_prepare)(void);
+
+    /* ---- API level 3: serial ports (APP_CAP_SERIAL) ----
+     * port: APP_SERIAL_USB, the USB-C CDC port (a PC or a phone in OTG: the
+     * radio is a USB device, never a host), or APP_SERIAL_KPLUG, the K-plug
+     * UART (3.3 V TTL, the programming cable's lines; RX shares its contact
+     * with a speaker-mic's PTT).  While an app uses a port, the resident
+     * command parser and K5Viewer leave it alone; when the app returns, the
+     * loader drops the bytes it left unread and sets the K-plug back to
+     * 38400 bauds.
+     * serial_read copies up to len received bytes, returns their count (0 when
+     * nothing waits).  Each port receives into a 256-byte ring: poll it before
+     * 256 bytes can arrive (27 ms at 115200 bauds, 270 ms at 9600; over USB,
+     * a few ms while a host streams).  On USB a lapped ring is reported by
+     * serial_ctl (APP_SERIAL_LOST) and read on from the newest byte; the
+     * K-plug ring (DMA) cannot tell, its oldest bytes are silently replaced.
+     * serial_write needs interrupts enabled (the USB transfer completes in
+     * the USB interrupt).
+     * serial_write sends len bytes and returns once they are out (USB: taken
+     * by the host).  false when no host has the USB port open (DTR clear) or
+     * the host did not take the data within 50 ms: the unsent rest is then
+     * dropped, and the next write starts clean.  The K-plug sends at its baud
+     * rate, unconditionally.
+     * serial_ctl sets the K-plug baud rate (baud 0 = unchanged; ignored for
+     * USB) and returns the port state: APP_SERIAL_* bits, the events since
+     * the previous serial_ctl on that port. */
+    uint16_t (*serial_read)(uint8_t port, void *buf, uint16_t len);
+    bool     (*serial_write)(uint8_t port, const void *buf, uint16_t len);
+    uint8_t  (*serial_ctl)(uint8_t port, uint32_t baud);
 } app_api_t;
+
+/* Serial ports and serial_ctl state bits (API level 3). */
+enum { APP_SERIAL_USB = 0, APP_SERIAL_KPLUG = 1 };
+#define APP_SERIAL_OK      0x01u  /* the port exists in this build            */
+#define APP_SERIAL_HOST    0x02u  /* USB: a host has the port open (DTR)      */
+#define APP_SERIAL_LOST    0x04u  /* event: received bytes overwritten unread */
+#define APP_SERIAL_TIMEOUT 0x08u  /* event: a write timed out, data dropped   */
+#define APP_SERIAL_ENUM    0x10u  /* event: USB (re-)enumerated by a host     */
 
 /* Unconditional, for the same reason: these offsets are what the apps and
  * the firmware must agree on, whatever the build options. */
@@ -386,7 +423,8 @@ _Static_assert(offsetof(app_api_t, sys_edition) == 276u &&
                "the level 2 API prefix must stay 328 bytes");
 _Static_assert(offsetof(app_api_t, handoff) == 356u &&
                offsetof(app_api_t, tx_prepare) == 364u &&
-               sizeof(app_api_t) == 368u,
+               offsetof(app_api_t, serial_read) == 368u &&
+               sizeof(app_api_t) == 380u,
                "app_api_t is append-only: every edition shares this layout");
 
 /* Wrap-safe modular ordering for deadlines less than half a cycle-counter

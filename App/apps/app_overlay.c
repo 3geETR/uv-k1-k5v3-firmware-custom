@@ -60,6 +60,11 @@
 #include "version.h"
 #include "stack_usage.h"
 #endif
+#ifdef ENABLE_USB
+#define APP_SERIAL 1
+#include "app/uart.h"
+#include "driver/vcp.h"
+#endif
 
 _Static_assert(sizeof(app_header_t) == 64u && _Alignof(app_header_t) == 4u,
                "app_header_t must stay 64 bytes with word alignment");
@@ -99,6 +104,9 @@ enum {
 #ifdef ENABLE_FEAT_F4HWN_OVERLAY_INFO
                        | APP_CAP_SYSINFO
 #endif
+#ifdef APP_SERIAL
+                       | APP_CAP_SERIAL
+#endif
 };
 
 /* Keep the small zero-initialized state together so callbacks can address it
@@ -135,6 +143,15 @@ static struct {
     uint8_t handoff_from;
     uint8_t handoff_len;   /* never above APP_HANDOFF_MAX */
     bool    handoff_unread;
+#ifdef APP_SERIAL
+    /* USB serial port: the receive total at the app's read position, the
+     * events serial_ctl has not reported yet, the host configuration count it
+     * last saw, whether the app used the port. */
+    uint32_t serial_read_total;
+    uint8_t  serial_evt;
+    uint8_t  serial_enum;
+    bool     serial_used;
+#endif
     uint8_t cfg_buf[APP_CONFIG_PROXY_MAX];
     uint8_t handoff_buf[APP_HANDOFF_MAX];
 } app_state;
@@ -193,6 +210,119 @@ static void app_blit_full(void)
     /* The normal loop mirrors completed frames after drawing. Overlay apps
      * bypass that loop, so publish the frame from this ABI wrapper. */
     K5VIEWER_Update(false);
+}
+#endif
+
+#ifdef APP_SERIAL
+/* ---- API level 3: serial ports ----
+ * USB only for now: APP_SERIAL_KPLUG reports no port (serial_ctl 0).  The
+ * first call drops what the main loop left unread and takes the current USB
+ * counters as the reference.  Each call re-arms the K5Viewer lock (the
+ * countdown CHIRP already uses), so K5Viewer neither reads the app's bytes as
+ * viewer commands nor mixes screen frames into the app's stream while the app
+ * polls the port. */
+#define APP_SERIAL_WRITE_CYC (48000000u / 20u)   /* 50 ms for the host to take a write */
+
+_Static_assert(sizeof(VCP_RxBuf) == 256u, "the ring indexes wrap as uint8_t");
+
+static uint32_t app_cycles_raw(void);
+
+/* Drop the unread bytes: the ISR may leave the write index at the ring size
+ * before wrapping it, hence uint8_t. */
+static void app_serial_flush(void)
+{
+    VCP_ReadIndex = (uint8_t)VCP_RxBufPointer;
+}
+
+static bool app_serial_claim(uint8_t port)
+{
+    if (port != APP_SERIAL_USB)
+        return false;
+    if (!app_state.serial_used) {
+        app_state.serial_used       = true;
+        app_serial_flush();
+        app_state.serial_read_total = cdc_acm_rx_total;
+        app_state.serial_enum       = cdc_acm_config_count;
+    }
+#ifdef ENABLE_FEAT_F4HWN_K5VIEWER
+    gUART_LockK5Viewer = 255;
+#endif
+    return true;
+}
+
+static uint16_t app_serial_read(uint8_t port, void *buf, uint16_t len)
+{
+    if (!app_serial_claim(port))
+        return 0;
+    /* 256 bytes or more since the app's position: the ISR lapped it. */
+    const uint32_t total = cdc_acm_rx_total;
+    if (total - app_state.serial_read_total >= sizeof(VCP_RxBuf)) {
+        app_serial_flush();
+        app_state.serial_read_total = total;
+        app_state.serial_evt |= APP_SERIAL_LOST;
+    }
+    /* From the command parser's own read index, so the bytes an app consumed
+     * are never parsed as commands once the main loop resumes. */
+    const uint8_t w = (uint8_t)VCP_RxBufPointer;
+    uint8_t r = (uint8_t)VCP_ReadIndex;
+    uint8_t *p = buf;
+    uint16_t n = 0;
+    while (n < len && r != w)
+        p[n++] = VCP_RxBuf[r++];
+    VCP_ReadIndex = r;
+    app_state.serial_read_total += n;
+    return n;
+}
+
+static bool app_serial_write(uint8_t port, const void *buf, uint16_t len)
+{
+    if (!app_serial_claim(port) || !dtr_enable)
+        return false;
+    if (!len)
+        return true;
+    if (cdc_acm_start_send(buf, len)) {
+        const uint32_t t0 = app_cycles_raw();
+        while (ep_tx_busy_flag)
+            if (app_cycles_raw() - t0 >= APP_SERIAL_WRITE_CYC)
+                goto timeout;
+        return true;
+    }
+timeout:
+    cdc_acm_cancel_send();
+    app_state.serial_evt |= APP_SERIAL_TIMEOUT;
+    return false;
+}
+
+static uint8_t app_serial_ctl(uint8_t port, uint32_t baud)
+{
+    (void)baud;
+    if (!app_serial_claim(port))
+        return 0;
+    uint8_t st = APP_SERIAL_OK | app_state.serial_evt;
+    app_state.serial_evt = 0;
+    if (dtr_enable)
+        st |= APP_SERIAL_HOST;
+    const uint8_t c = cdc_acm_config_count;
+    if (c != app_state.serial_enum) {
+        app_state.serial_enum = c;
+        st |= APP_SERIAL_ENUM;
+    }
+    return st;
+}
+
+/* After the app: its half-read frames must not reach the command parser or
+ * K5Viewer once the main loop resumes. */
+static void app_serial_release(void)
+{
+    if (!app_state.serial_used)
+        return;
+    app_state.serial_used = false;
+    app_state.serial_evt  = 0;
+    app_serial_flush();
+#ifdef ENABLE_FEAT_F4HWN_K5VIEWER
+    VCP_K5ViewerSync();
+    gUART_LockK5Viewer = 0;
+#endif
 }
 #endif
 
@@ -1140,6 +1270,11 @@ static const app_api_t app_api = {
     .handoff             = app_handoff,
     .handoff_read        = app_handoff_read,
     .tx_prepare          = RADIO_PrepareTx,
+#ifdef APP_SERIAL
+    .serial_read         = app_serial_read,
+    .serial_write        = app_serial_write,
+    .serial_ctl          = app_serial_ctl,
+#endif
 };
 
 /* Hand-off guards: a chain of apps that hand off to each other for ever (a
@@ -1250,6 +1385,9 @@ static uint8_t app_launch(uint8_t slot)
 
     /* A capture the app left open must not keep PA4 and the DAC. */
     app_af_capture_close();
+#ifdef APP_SERIAL
+    app_serial_release();
+#endif
 
     /* First thing after the app: nothing has drawn over its last screen yet. */
     if (h.flags & APP_FLAG_SAVE_SCREEN)
