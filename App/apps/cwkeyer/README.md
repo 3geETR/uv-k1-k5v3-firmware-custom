@@ -113,14 +113,16 @@ must be released before the app will accept another transmission.
 
 ## RF keying
 
-On the first mark, the app calls the existing `tx_set_params` API service. That
-service selects the TX VFO, starts the BK4829 transmitter and enables the board
-PA before returning. The app immediately removes PA drive, mutes every
-audio/sub-audio source and caches BK4829 register `0x36`, whose upper byte
-drives the `VRAMP` PA-bias output. It then applies the proportional crystal
-correction to synthesizer registers `0x38`/`0x39`, in their native 10 Hz units,
-and restarts register `0x30` through zero so the VCO recalibrates and latches
-the corrected frequency.
+On the first mark, the app calls the `tx_prepare` API service when the resident
+API table provides it. That service selects the TX VFO and configures the
+BK4829 transmitter without the FM settling waits, while leaving the board PA
+disabled. On an older level 3 table, the app falls back to `tx_set_params` and
+immediately removes PA drive after the call. It then mutes every audio/sub-audio
+source and caches BK4829 register `0x36`, whose upper byte drives the `VRAMP`
+PA-bias output. The proportional crystal correction is applied to synthesizer
+registers `0x38`/`0x39`, in their native 10 Hz units, and register `0x30` is
+restarted through zero so the VCO recalibrates and latches the corrected
+frequency.
 Register `0x50` remains in TX modulation-mute for the entire session. During a
 mark, register `0x30` is `0xC3FA`, matching the driver's TX-link configuration
 with the microphone ADC disabled. During a space it becomes `0xC3F2`, which
@@ -145,11 +147,13 @@ the local TX sidetone. When enabled, the speaker remains open throughout RX:
 gating it with the FM squelch clips the start of dits and chops the tone at
 every carrier transition.
 
-The atomic `tx_set_params` service necessarily enables RF briefly before the
-overlay can remove PA drive. The app then waits for the corrected synthesizer
-setting to lock and applies the normal ramp to the first deliberate mark. A
-spectrum/SDR check is required before assuming the four-step envelope is
-spectrally clean on every power band.
+With `tx_prepare`, PA enable remains off throughout setup, so there is no
+unshaped carrier before the first deliberate mark. The compatibility fallback
+to atomic `tx_set_params` can still enable RF briefly before the overlay can
+remove PA drive. After either path, the app waits for the corrected synthesizer
+setting to lock and applies the normal ramp. A spectrum/SDR check is required
+before assuming the four-step envelope is spectrally clean on every power
+band.
 
 Squeeze keying is available only in `CW USB`: the single-key `get_key`
 API shows one SIDE key at a time. The paddle mode has automatic repeat and no
@@ -159,13 +163,21 @@ is routed to the BK4829 `AF_ALAM` output while register `0x50` keeps TX
 modulation muted. Morse edges change only the Tone1 frequency control word in
 register `0x71`; writing zero silences the speaker between marks without the
 pop caused by repeatedly changing either the tone-enable or AF-selector
-register. At the end of the semi-break-in delay, the AF DAC gain fades to its
-minimum before the selector moves to AF output 5 and the speaker amplifier is
-disabled. After the RX profile is restored, that output settles at
-minimum DAC gain before the amplifier is enabled. The gain then rises one DAC
-code at a time instead of jumping directly to full level. The over-the-air
-signal therefore remains A1A rather than MCW. Key `0` controls both receive
-audio and the TX sidetone.
+register. At the end of the semi-break-in delay, the speaker amplifier is
+disabled and the AF DAC gain is set to its minimum before the selector moves
+to AF output 5. After the RX profile is restored, that output settles for
+50 ms at minimum DAC gain before the amplifier is enabled. The gain then rises
+one DAC code at a time instead of jumping directly to full level. Receive
+retunes (pitch, crystal correction, frequency offset) use the same sequence.
+The over-the-air signal therefore remains A1A rather than MCW. Key `0`
+controls both receive audio and the TX sidetone.
+
+When speaker audio is enabled, the speaker amplifier remains off for 10 ms
+after the AF selector moves to `AF_ALAM` on the first CW Keyer mark of a TX
+session. Tone1 and the RF carrier remain off during this settling interval;
+the amplifier is enabled before the sidetone and the shaped RF mark start
+together. This avoids both the selector click and a clipped first sidetone.
+This CW Keyer-only sequencing does not change CW USB arming.
 
 ## Status and known limits
 

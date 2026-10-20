@@ -188,7 +188,10 @@ static struct {
 #endif
     uint8_t wpm, mode, uiCandidate, paBias, paControl;
     uint8_t padRaw, padStable, padPolls;
-    uint8_t smMs, ampMs;   /* ampMs: amplifier on in that many service ms */
+    uint8_t smMs;
+#if CW_KEYER_USB
+    uint8_t ampMs;   /* amplifier on in that many service milliseconds */
+#endif
     int16_t calSteps, tuneOffset10Hz;
     uint16_t rxPitchHz, breakInMs, xtalBase;
     uint16_t serviceMs, batteryMs, markMs, hangElapsedMs;
@@ -345,7 +348,9 @@ static void returnToRx(void)
     a->delay_ms(10u);
     a->tx_end();
     g.txReady = false;
+#if CW_KEYER_USB
     g.ampMs = 0u;
+#endif
     g.hangElapsedMs = 0u;
 #if CW_KEYER_USB
     g.armWait = false;
@@ -745,7 +750,7 @@ static void prepareTx(void)
     a->bk_write(REG_FREQ_LOW, (uint16_t)frequency);
     a->bk_write(REG_FREQ_HIGH, (uint16_t)(frequency >> 16));
 
-    /* REG_38/39 are written after tx_set_params, so restart the TX link to
+    /* REG_38/39 are written after the TX setup, so restart the TX link to
      * recalibrate the VCO and latch the corrected synthesizer frequency. Keep
      * internal PA gain disabled when the link comes back up. */
     a->bk_write(REG_TX_LINK, TX_LINK_OFF);
@@ -759,9 +764,18 @@ static void prepareTx(void)
     a->bk_write(REG_TONE, TONE1_CONFIG);
     sidetone(false);
     a->set_af(AF_ALAM);
-    /* The TX setup leaves the AF output moving: the amplifier comes on
-     * AMP_SETTLE_MS later, from serviceOneMs, while the mark goes on. */
+#if CW_KEYER_USB
+    /* Preserve the USB arming path: it lets the AF output settle
+     * asynchronously before the usual first paddle mark. */
     g.ampMs = AMP_SETTLE_MS;
+#else
+    /* CW Keyer has no arming interval. Keep the tone and RF off until the AF
+     * output has settled, then enable the amplifier before the first mark so
+     * its local sidetone is not clipped. */
+    if (g.speaker)
+        a->delay_ms(AMP_SETTLE_MS);
+    a->audio_path(g.speaker);
+#endif
     g.txReady = true;
     g.denied = false;
     g.statusRedraw = true;
@@ -813,9 +827,9 @@ static void serviceOneMs(void)
 {
     const app_api_t *const a = A;   /* one load: calls may change g */
     a->delay_ms(1u);
+#if CW_KEYER_USB
     if (g.ampMs && --g.ampMs == 0u)
         a->audio_path(g.speaker);
-#if CW_KEYER_USB
     if (g.armMs)
         g.armMs--;
     const uint16_t hangMs = g.armWait ? ARM_WAIT_MS : g.breakInMs;
