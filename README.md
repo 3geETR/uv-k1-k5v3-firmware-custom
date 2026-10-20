@@ -136,7 +136,7 @@ remains available for navigation and operation.
 
 ### Overlay applications and APRS
 
-Labs can store up to 48 applications from the current collection of 34 in
+Labs can store up to 48 applications from the current collection of 35 in
 external Flash. Each app is loaded into a dedicated 4 KiB RAM overlay only
 while it is running, while larger read-only assets such as text, fonts, bitmaps
 and lookup tables remain in external Flash.
@@ -145,7 +145,7 @@ The current app collection includes:
 
 - radio tools: Broadcast FM, Fox Hunt, Beacon, Beam, Signal Finder, Spectrum3D
   and ToneCall,
-- digital and signal apps: ACARS RX, ATIS RX, APRS RX, APRS TX, APRS Edit,
+- digital and signal apps: ACARS RX, AIS RX, ATIS RX, APRS RX, APRS TX, APRS Edit,
   APRS DIGI, CW Decode, CW Keyer, CW USB, SSTV, POCSAG RX, Sonde M10, Sonde M20,
   Sonde RS41 and EPIRB 406,
 - tools and diagnostics: Resistor, System Info and Flash Map,
@@ -163,6 +163,9 @@ path-independent duplicate suppression and channel-busy protection.
 ACARS RX receives the 2400 bit/s AM-MSK aircraft data link, checks odd parity
 and CRC, and keeps a three-message history with aircraft address, flight ID,
 label and printable message text.
+AIS RX samples the raw discriminator at 38.4 kHz, validates HDLC frames and
+shows Class A/B position and static reports from AIS1 or AIS2, one channel at a
+time. Its Flipper Zero bench vectors stay on 433.650 MHz.
 
 > [!IMPORTANT]
 > Overlay apps, including APRS RX, APRS TX and APRS DIGI, are experimental and intended for
