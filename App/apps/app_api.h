@@ -49,8 +49,8 @@
  *      sample / close (RX audio on PA4), cycles_48mhz, draw_frequency,
  *      handoff / handoff_read, tx_prepare; the Labs system information slots
  *      become part of the layout in every build, so level 3 services have one
- *      offset; serial_read / serial_write / serial_ctl (USB-C and K-plug
- *      serial ports, APP_CAP_SERIAL) */
+ *      offset; serial_read / serial_write / serial_ctl (the USB-C serial
+ *      port, K-plug reserved; APP_CAP_SERIAL) */
 #define APP_ABI_MAJOR  1u
 #define APP_API_LEVEL  3u
 
@@ -381,28 +381,29 @@ typedef struct app_api {
 
     /* ---- API level 3: serial ports (APP_CAP_SERIAL) ----
      * port: APP_SERIAL_USB, the USB-C CDC port (a PC or a phone in OTG: the
-     * radio is a USB device, never a host), or APP_SERIAL_KPLUG, the K-plug
-     * UART (3.3 V TTL, the programming cable's lines; RX shares its contact
-     * with a speaker-mic's PTT).  While an app uses a port, the resident
-     * command parser and K5Viewer leave it alone; when the app returns, the
-     * loader drops the bytes it left unread and sets the K-plug back to
-     * 38400 bauds.
+     * radio is a USB device, never a host).  APP_SERIAL_KPLUG, the K-plug
+     * UART, is reserved and not implemented yet: serial_ctl returns 0 (no
+     * APP_SERIAL_OK), serial_read 0 and serial_write false.
+     * From the app's first serial call until it returns, the resident command
+     * parser and K5Viewer leave the USB port alone; when the app returns, the
+     * loader drops the bytes it left unread.
      * serial_read copies up to len received bytes, returns their count (0 when
-     * nothing waits).  Each port receives into a 256-byte ring: poll it before
-     * 256 bytes can arrive (27 ms at 115200 bauds, 270 ms at 9600; over USB,
-     * a few ms while a host streams).  On USB a lapped ring is reported by
-     * serial_ctl (APP_SERIAL_LOST) and read on from the newest byte; the
-     * K-plug ring (DMA) cannot tell, its oldest bytes are silently replaced.
-     * serial_write needs interrupts enabled (the USB transfer completes in
-     * the USB interrupt).
-     * serial_write sends len bytes and returns once they are out (USB: taken
-     * by the host).  false when no host has the USB port open (DTR clear) or
-     * the host did not take the data within 50 ms: the unsent rest is then
-     * dropped, and the next write starts clean.  The K-plug sends at its baud
-     * rate, unconditionally.
-     * serial_ctl sets the K-plug baud rate (baud 0 = unchanged; ignored for
-     * USB) and returns the port state: APP_SERIAL_* bits, the events since
-     * the previous serial_ctl on that port. */
+     * nothing waits).  The port receives into a 256-byte ring: poll it before
+     * 256 bytes can arrive (a few ms while a host streams).  A lapped ring is
+     * reported by serial_ctl (APP_SERIAL_LOST) and read on from the newest
+     * byte.
+     * serial_write sends len bytes and returns once the host has taken them;
+     * false when no host has the port open (DTR clear) or the host did not
+     * take the data within 50 ms: the unsent rest is then dropped, and the
+     * next write starts clean.  It needs interrupts enabled (the transfer
+     * completes in the USB interrupt).
+     * serial_ctl returns the port state: APP_SERIAL_* bits, the events since
+     * the previous serial_ctl.  baud is for the K-plug, ignored for USB.
+     * Planned for the K-plug (3.3 V TTL, the programming cable's lines; RX
+     * shares its contact with a speaker-mic's PTT): a 256-byte DMA ring that
+     * cannot report a lap, writes at the baud rate unconditionally, the baud
+     * rate set by serial_ctl (0 = unchanged) and 38400 bauds restored when
+     * the app returns. */
     uint16_t (*serial_read)(uint8_t port, void *buf, uint16_t len);
     bool     (*serial_write)(uint8_t port, const void *buf, uint16_t len);
     uint8_t  (*serial_ctl)(uint8_t port, uint32_t baud);

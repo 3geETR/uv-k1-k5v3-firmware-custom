@@ -523,7 +523,10 @@ int usbd_ep_start_write(const uint8_t ep, const uint8_t *data, uint32_t data_len
 
 /* Drop an IN transfer the host is not taking: the pending packet is flushed
  * and the rest forgotten, so the buffer may be reused.  Call with the USB
- * interrupt masked (it shares the endpoint index register). */
+ * interrupt masked (it shares the endpoint index register).
+ * FifoNotEmpty as in usbd_ep_open: a packet may wait with InPktRdy clear.
+ * actual_xfer_len cleared: if the flush raises an IN interrupt, the ISR then
+ * reports 0 bytes, and the class driver queues no ZLP after the cancel. */
 void usbd_ep_cancel_write(const uint8_t ep)
 {
   uint8_t ep_idx = USB_EP_GET_IDX(ep);
@@ -531,7 +534,8 @@ void usbd_ep_cancel_write(const uint8_t ep)
 
   pyusb_set_active_ep(ep_idx);
   g_pyusb_udc.in_ep[ep_idx].xfer_len = 0;
-  if (USB->IN_CSR1 & USB_INCSR_IPR)
+  g_pyusb_udc.in_ep[ep_idx].actual_xfer_len = 0;
+  if (USB->IN_CSR1 & (USB_INCSR_IPR | USB_INCSR_FifoNotEmpty))
     USB->IN_CSR1 = USB_INCSR_FF;
   pyusb_set_active_ep(old_ep_idx);
 }

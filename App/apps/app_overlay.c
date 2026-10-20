@@ -216,22 +216,28 @@ static void app_blit_full(void)
 #ifdef APP_SERIAL
 /* ---- API level 3: serial ports ----
  * USB only for now: APP_SERIAL_KPLUG reports no port (serial_ctl 0).  The
- * first call drops what the main loop left unread and takes the current USB
- * counters as the reference.  Each call re-arms the K5Viewer lock (the
- * countdown CHIRP already uses), so K5Viewer neither reads the app's bytes as
- * viewer commands nor mixes screen frames into the app's stream while the app
- * polls the port. */
+ * first call drops what the main loop left unread, takes the current USB
+ * counters as the reference and holds the K5Viewer lock until the app returns
+ * (K5VIEWER_LOCK_HELD: the countdown CHIRP uses, frozen), so K5Viewer neither
+ * reads the app's bytes as viewer commands nor mixes screen frames into the
+ * app's stream, however rarely the app polls the port. */
 #define APP_SERIAL_WRITE_CYC (48000000u / 20u)   /* 50 ms for the host to take a write */
 
 _Static_assert(sizeof(VCP_RxBuf) == 256u, "the ring indexes wrap as uint8_t");
 
 static uint32_t app_cycles_raw(void);
 
-/* Drop the unread bytes: the ISR may leave the write index at the ring size
- * before wrapping it, hence uint8_t. */
+/* Drop the unread bytes and take the receive total at the new read position,
+ * with the USB interrupt held off: a packet stored in between would otherwise
+ * be counted on the wrong side.  The ISR may leave the write index at the ring
+ * size before wrapping it, hence uint8_t. */
 static void app_serial_flush(void)
 {
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     VCP_ReadIndex = (uint8_t)VCP_RxBufPointer;
+    app_state.serial_read_total = cdc_acm_rx_total;
+    __set_PRIMASK(primask);
 }
 
 static bool app_serial_claim(uint8_t port)
@@ -239,14 +245,13 @@ static bool app_serial_claim(uint8_t port)
     if (port != APP_SERIAL_USB)
         return false;
     if (!app_state.serial_used) {
-        app_state.serial_used       = true;
+        app_state.serial_used = true;
         app_serial_flush();
-        app_state.serial_read_total = cdc_acm_rx_total;
-        app_state.serial_enum       = cdc_acm_config_count;
-    }
+        app_state.serial_enum = cdc_acm_config_count;
 #ifdef ENABLE_FEAT_F4HWN_K5VIEWER
-    gUART_LockK5Viewer = 255;
+        gUART_LockK5Viewer = K5VIEWER_LOCK_HELD;
 #endif
+    }
     return true;
 }
 
@@ -258,7 +263,6 @@ static uint16_t app_serial_read(uint8_t port, void *buf, uint16_t len)
     const uint32_t total = cdc_acm_rx_total;
     if (total - app_state.serial_read_total >= sizeof(VCP_RxBuf)) {
         app_serial_flush();
-        app_state.serial_read_total = total;
         app_state.serial_evt |= APP_SERIAL_LOST;
     }
     /* From the command parser's own read index, so the bytes an app consumed
