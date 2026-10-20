@@ -162,8 +162,9 @@ static struct {
     uint8_t  prevKey, redraw;
     bool     running;
     uint8_t  count, cur;               /* pages kept, page shown (0 = newest)     */
-    uint8_t  cw, spk;                  /* the saved settings, in cfg order: view (0
-                                          normal, CW_COMPACT compact), speaker    */
+    uint8_t  cw, spk, tones;           /* the saved settings, in cfg order: view (0
+                                          normal, CW_COMPACT compact), speaker,
+                                          key 4: keep the pages without text      */
     uint8_t  refresh;                  /* housekeeping slots since the last redraw */
     uint8_t  top, lim;                 /* first text row shown, its limit         */
     uint16_t nOk;                      /* pages received                          */
@@ -238,11 +239,12 @@ static void closePage(sl_t *m){
      * itself; so is the padding of a numeric page */
     while(n && (t[n-1u]==GAP || (m->func==FUNC_NUMERIC && t[n-1u]==' '))) n--;
     for(unsigned i=0;i<n;i++) gaps+=t[i]==GAP;
-    /* An address alone is dropped: a slicer that slipped a bit reads shifted
-     * codewords, which are valid ones as often as not (the code is cyclic),
-     * and they come out as addresses without text. So is a copy with more
-     * characters lost than read. */
-    if(!n || 2u*gaps>n) return;
+    /* An address alone is dropped unless key 4 keeps the tone-only pages: a
+     * slicer that slipped a bit reads shifted codewords, which are valid ones
+     * as often as not (the code is cyclic), and they come out as addresses
+     * without text. A copy with more characters lost than read is always
+     * dropped. */
+    if((!n && !g.tones) || 2u*gaps>n) return;
     g.redraw|=REDRAW_FRAME;
     for(unsigned j=0;j<g.count;j++){
         page_t *q=g.history[j];
@@ -457,6 +459,7 @@ static void draw(void){
     A->status_clear();
     A->print_inverse(s+T_TITLE,2,0,true,true,(uint8_t)(2u+T_TITLE_CHARS*4u));
     A->draw_battery();
+    if(g.tones) A->print_inverse(s+T_TFLAG,(uint8_t)(6u+T_TITLE_CHARS*4u),0,true,true,(uint8_t)(10u+T_TITLE_CHARS*4u));   /* key 4 on */
 
     if(g.count){
         /* the address in bold on line 0, and at its right two capsules as in
@@ -488,6 +491,7 @@ static void draw(void){
             if(g.cw){ if(r<4u) A->print_tiny(str,0,(uint8_t)(8u+r*6u),false,true); }
             else if(r<ROWS) A->print_normal(str,0,0,(uint8_t)(1u+r));
         }
+        if(!p->len) A->print_normal(s+T_TONE,0,0,1);   /* an address alone */
         if(!g.cw && rows>ROWS) lim=rows-ROWS;
     }
     g.lim=(uint8_t)lim;
@@ -567,6 +571,7 @@ static void handleKeys(void){
         for(unsigned k=0;k<NLANE*NSL;k++) g.sl[k].ok=0;
     }
     else if(key==APP_KEY_3) g.dbg^=1u;   /* bottom line: the page's level and age / the counters */
+    else if(key==APP_KEY_4) g.tones^=1u;   /* keep the pages without text (saved) */
     else if(key==APP_KEY_1) g.spk^=1u;   /* speaker: listen() switches it at the next slot */
     else if(key==APP_KEY_STAR){ g.cw^=CW_COMPACT; g.top=0; }   /* the view (saved on exit) */
 }
@@ -714,10 +719,12 @@ void app_main(const app_api_t *api){
      * few tens of hertz. RADIO_SetupRegisters puts both registers back on exit. */
     api->bk_write(REG_2B,(uint16_t)((api->bk_read(REG_2B)|0x0700u)&~0x0007u));
     api->bk_write(REG_73,(uint16_t)(api->bk_read(REG_73)|0x0010u));
-    api->cfg_load(&g.cw,2);      /* view and speaker; erased flash (0xFF) or junk:
-                                    normal view, speaker off */
+    api->cfg_load(&g.cw,3);      /* view, speaker, tone-only pages; erased flash
+                                    (0xFF) or junk: normal view, speaker off,
+                                    tone-only pages dropped */
     if(g.cw!=CW_COMPACT) g.cw=0;
     g.spk=(uint8_t)(g.spk==1u);
+    g.tones=(uint8_t)(g.tones==1u);   /* a 2-byte config from an older version: off */
     /* Speaker amplifier (PA8) as saved, off by default: PA4 joins the audio
      * before the amplifier (APRS RX); only the BK4829 AF output must be on.
      * Key 1 switches the speaker, through listen(). */
@@ -731,5 +738,5 @@ void app_main(const app_api_t *api){
     api->set_af(APP_AF_MUTE);
     api->audio_path(false);
     api->led(false);             /* not left on in the middle of a blink */
-    api->cfg_save(&g.cw,2);      /* staged: flash is written only after a change */
+    api->cfg_save(&g.cw,3);      /* staged: flash is written only after a change */
 }

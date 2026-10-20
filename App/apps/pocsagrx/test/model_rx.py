@@ -300,11 +300,12 @@ class Slicer:
             # the page itself; so is the padding of a numeric page
             while t and (t[-1] == GAP or (self.func == pocsag.FUNC_NUMERIC and t[-1] == 32)):
                 t = t[:-1]
-            # An address alone is dropped: a slicer that slipped a bit reads
-            # shifted codewords, which are valid ones as often as not (the
-            # code is cyclic), and they come out as addresses without text.
-            # So is a copy with more characters lost than read.
-            if t and 2 * t.count(GAP) <= len(t):
+            # An address alone is dropped unless tone-only pages are kept
+            # (key 4): a slicer that slipped a bit reads shifted codewords,
+            # which are valid ones as often as not (the code is cyclic), and
+            # they come out as addresses without text. A copy with more
+            # characters lost than read is always dropped.
+            if (t or self.dm.tones) and 2 * t.count(GAP) <= len(t):
                 self.dm.found(self.ric, self.func, t, self.at, self.lane.dup)
         self.ric = -1
 
@@ -380,8 +381,9 @@ class Demod:
     # bit); 512 bauds, 18.75 samples a bit, an 8-sample box
     LANES = ((1200, 4), (512, 8))
 
-    def __init__(self, fs=FS_ADC, pll=3, ks=SLICERS, lanes=LANES):
+    def __init__(self, fs=FS_ADC, pll=3, ks=SLICERS, lanes=LANES, tones=False):
         self.pll = pll
+        self.tones = tones                         # key 4: keep the pages without text
         self.dc = BIAS << 4
         self.lanes = [Lane(self, b, n, ks, fs) for b, n in lanes]
         self.sl = [s for ln in self.lanes for s in ln.sl]
