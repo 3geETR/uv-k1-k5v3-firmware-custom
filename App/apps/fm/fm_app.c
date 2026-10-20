@@ -306,6 +306,18 @@ static void onShort(uint8_t key)
 }
 static void onLong(uint8_t key){ g.fArm=false; func(key); }   /* long band / MR / scan / quit */
 
+/* Do not let the key that closed this modal app reach the resident UI. */
+static void waitKeyRelease(void)
+{
+    uint8_t stable=0;
+    while(stable<2u){
+        if(A->get_key()==APP_KEY_INVALID) stable++;
+        else stable=0;
+        A->delay_ms(10);
+        A->backlight_update();
+    }
+}
+
 __attribute__((section(".text.entry"),used))
 void app_main(const app_api_t *api)
 {
@@ -329,12 +341,15 @@ void app_main(const app_api_t *api)
     uint16_t heldMs=0;
     bool     firedLong=false;
     bool     dirty=true;                               /* redraw only on change */
+    bool     ignoreEntryKey=true;                      /* long 0 is still down */
 
     while(g.running){
         uint8_t key=A->get_key();
         bool rep=(key==APP_KEY_UP||key==APP_KEY_DOWN);
 
-        if(key==APP_KEY_SAVER){
+        if(ignoreEntryKey){
+            if(key==APP_KEY_INVALID) ignoreEntryKey=false;
+        } else if(key==APP_KEY_SAVER){
             held=APP_KEY_INVALID; heldMs=0; firedLong=false;
             A->delay_ms(10); A->backlight_update();
             continue;
@@ -378,6 +393,7 @@ void app_main(const app_api_t *api)
     }
 
     /* push our state back to the resident FM and persist (config + 48 channels) */
+    waitKeyRelease();
     if(!g.st.is_mr) g.st.sel_freq=g.st.freq_playing;
     A->fm_state(&g.st,true);
     A->fm_commit();
