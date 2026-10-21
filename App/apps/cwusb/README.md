@@ -1,121 +1,196 @@
 # CW USB overlay app
 
-CW USB keys an A1A-style carrier on the current TX VFO using a straight key
-or paddle on USB-C. It shares its source with CW Keyer, whose PTT/SIDE-key
-binary remains unchanged. The VFO must be in FM; the receiving station needs
-CW or SSB to hear an unmodulated carrier.
+`CW USB` is the USB-C-input variant of CW Keyer. It transmits a manually
+keyed A1A-style carrier on the current TX VFO and is entirely contained in its
+own 4 KiB overlay. The implementation is shared with `CW Keyer`, but this
+binary contains only the USB-C paddle input path.
 
-## Requirements and build
+## Requirements and install
 
-Use overlay ABI 1 / API level 3 with the silent `tx_prepare` service (table
-size at least 368 bytes). Older tables fail closed. No resident changes are
-required. From the repository root, run `./compile-app.sh cwusb`; the output
-is `build/Apps/CWUSB.app`. Use a free application slot for experiments.
-The existing ARM GCC 13.3.rel1 build uses a 4096-byte overlay; this combined
-version occupies 4088 bytes (8 bytes free). Stack usage is outside that figure.
+- F4HWN Fusion firmware with overlay ABI 1 and API level 3, including the
+  `tx_prepare` service (API table of at least 368 bytes). On an older API
+  table the app never arms, so it cannot transmit.
+- Build: `./compile-app.sh cwusb` from the repository root, output
+  `build/Apps/CWUSB.app`; install it in a free slot with UV Studio.
+- The VFO must be in FM. The transmitted signal is an unmodulated carrier, so
+  the other station needs a CW or SSB receiver to hear a tone.
 
-## Deliberate arming, once per launch
+## Migrating from CW Keyer 1.0
 
-At launch the padlock is shown and TX, including PTT, is locked. First leave
-both USB contacts and PTT released for at least 20 ms. Then hold the straight
-key TIP contact in STRAIGHT, or both paddle contacts together in PADDLE, for
-five continuous seconds. Releasing early restarts qualification.
+The recommended upgrade is to keep or update CW Keyer in its current slot and
+install CW USB in a free slot. CW Keyer keeps its existing settings because its
+name is unchanged.
 
-The existing Ready check appears as soon as five seconds qualify, even if
-the contacts stay held. It certifies the hold, not permission to transmit.
-Release ALL contacts and PTT for at least 20 ms before normal keying is
-allowed. There is no carrier during this gesture. Once operational, the app
-stays armed across RX/TX changes; closing and reopening requires a new gesture.
-Arming is never stored. Timing uses the existing 48 MHz API clock, not loop
-counts; an observed sampling gap longer than 50 ms restarts qualification.
+Settings are stored in the configuration area of the slot where the app is
+installed, tagged with the name of the app that saved them. CW USB therefore
+starts with defaults, even when it is installed in the former CW Keyer slot:
+the configuration left there is tagged `CW Keyer`, so CW USB ignores it.
+Configure CW USB once: use the same `XTAL` correction as CW Keyer and
+CW Decode, then set its WPM, tone, break-in, mode, keyer, contact order and
+speaker preference.
 
-The first detected/qualified keying request after RX is no longer consumed
-by the former preparation-only press and 300-service-pass holdoff. Silent
-`tx_prepare`, TX permission checks, PA ramps and the mark-duration protection
-remain. After a duration-limit refusal, the stale debounced contact is cleared
-on release so it cannot restart TX without a fresh valid contact.
+Settings are written to flash when you leave the app with `EXIT`. Switching
+the radio off or restarting it while CW USB is open loses the changes made in
+that session.
+
+## Arming the transmitter
+
+Transmission is locked each time CW USB starts: the padlock is shown in the
+status bar, and neither the USB-C contacts nor `PTT` can key the carrier. To
+arm it:
+
+1. Release every contact and `PTT` for at least 20 ms.
+2. Hold the tip contact closed for five seconds: the straight key, the dit
+   paddle, or both paddles together. Releasing it earlier restarts the count.
+3. When the check mark replaces the padlock, release everything again for at
+   least 20 ms.
+
+The gesture is the same in `STRAIGHT` and `PADDLE`, and nothing is
+transmitted while you make it. The ring contact is ignored during the
+gesture, so a mono plug can arm too. Once armed, the app stays armed until you
+leave it, across every return to receive. Arming is never saved: the next
+launch asks for the gesture again. `EXIT` works during the gesture, and the
+help page (`MENU`) cancels an arming in progress.
 
 ## Controls
 
-- `PTT`: straight key after arming, in either input mode.
-- USB D+ / TIP: straight key in STRAIGHT, dit in PADDLE.
-- USB D- / RING: dah in PADDLE.
-- `1`: STRAIGHT / PADDLE; `5`: reverse dit/dah.
-- `8`: cycle AUTO / IAMB A / IAMB B while idle; the visible label sits
-  between the setting capsules, clear of the S-meter and battery.
-- `0`: receive speaker; `2`: WPM; `3`: RX pitch; `4`: break-in; `6`: XTAL.
-- `F`, then `2`, `3`, `4`, or `6`: decrease the corresponding setting.
-- `UP` / `DOWN`: local tuning in 100 Hz steps, up to +/-50 kHz.
-- `MENU`: help; `EXIT`: close. EXIT works during arming. In STRAIGHT,
-  a held keying control can take priority until released; do not treat EXIT
-  as a separately validated emergency RF cutoff.
+- `PTT`: straight-key carrier in every mode, once armed.
+- USB-C D+ (tip): straight key in `STRAIGHT`, dit in `PADDLE`.
+- USB-C D- (ring): dah in `PADDLE`.
+- `1`: toggle `STRAIGHT` / `PADDLE`.
+- `8`: cycle the paddle keyer `AUTO` / `IAMB A` / `IAMB B` (shown on the main
+  screen). Refused while the transmitter is prepared: wait for the return to
+  receive.
+- `0`: enable or mute the CW receive audio path.
+- `2`: raise the keyer speed (5 to 60 WPM).
+- `3`: raise the receive CW tone by 50 Hz.
+- `4`: raise the semi-break-in delay by 50 ms.
+- `5`: swap the dit and dah contacts.
+- `6`: raise the crystal correction by one BK4829 `REG_3B` step.
+- `F`, then `2`, `3`, `4` or `6`: lower the corresponding setting.
+- `UP` / `DOWN`: tune locally in 100 Hz steps, up to +/-50 kHz.
+- `MENU`: show or close the help page.
+- `EXIT`: leave the app.
 
-## Paddle algorithms and persistence
+## Paddle keyer modes
 
-AUTO retains the original alternating/repeating paddle behavior without
-opposite-contact memory. IAMB A remembers a qualified isolated opposite tap;
-releasing a squeeze does not queue an extra opposite element solely because
-of the squeeze. IAMB B additionally remembers a squeeze during the mark,
-including the ramps, and completes the opposite element after release. A
-squeeze occurring only in the space does not queue that tail.
+The USB variant samples both contacts together, so a squeeze is visible. Key
+`8` selects how the paddles are read; the choice is saved with the other
+settings.
 
-Key 8 is refused during a prepared TX session or active element; release and
-wait for RX before retrying. The selected mode uses the existing reserved
-configuration byte (0=AUTO, 1=A, 2=B); invalid values select AUTO. Old USB
-settings wrote zero here and retain AUTO. No configuration growth or new
-resident service is required. Arming itself is never persistent.
+| Mode | Paddles read | Squeeze | Opposite paddle tapped during an element |
+|---|---|---|---|
+| `AUTO` | after each element and its space | alternates dits and dahs, stops as soon as you release | ignored if released before the space ends |
+| `IAMB A` | also during the element and the space | alternates, stops as soon as you release | remembered when pressed alone, sent next |
+| `IAMB B` | as `IAMB A` | alternates; a squeeze still held during an element adds one opposite element after release | as `IAMB A` |
 
-## Adapter and configuration
+`AUTO` is the keyer of CW USB 1.2: automatic repeat and no paddle memory.
+In `IAMB A`, a tap on the opposite paddle while the current one is still held
+reads as a squeeze and is not remembered.
+
+## USB-C paddle adapter
 
 ![USB-C paddle adapter wiring](usbc-paddle-wiring.svg)
 
-D+ (PA12) goes to TIP, D- (PA11) to RING and GND to SLEEVE; contacts close to
-ground. Leave VBUS, CC and shield insulated and unconnected. Never connect
-this adapter to a charger or PC. The app saves/restores its USB pin/clock bits;
-there is no PC link while it is open. No CC-based cable detection is attempted.
+Wire a USB-C plug to a 3.5 mm stereo jack as follows:
 
-Both contacts must read open during the initial/final release. Unlike the
-old STRAIGHT behavior, a mono plug grounding RING cannot complete this gesture.
-A contact already closed on launch or never released cannot arm. A short
-appearing after initial release, lasting five seconds and then disappearing
-cannot be distinguished from a deliberate gesture by software alone.
+| USB-C line | MCU pin | Jack | Function |
+|---|---|---|---|
+| D+ | PA12 | tip | dit or straight key |
+| D- | PA11 | ring | dah |
+| GND | - | sleeve | common |
+| VBUS, CC, shield | - | insulated, not connected | - |
 
-Settings use the existing 12-byte layout and the installed slot's configuration,
-tagged by app name. Preserve settings before replacing an app in the same slot;
-CW Keyer and CW USB have different names. Arming is RAM-only.
+Contacts close to ground; the app supplies the pull-ups. The adapter works in
+both USB-C plug orientations. A mono plug can be used only in `STRAIGHT`, where
+the ring is ignored. In `PADDLE`, its ring-to-sleeve short holds the ring
+contact closed permanently: dah in `DI-DA`, dit in `DA-DI`.
 
-## Validation and remaining limits
+Never plug this adapter into a charger or computer: a charger energizes VBUS,
+and a computer host can also drive or bias D+/D-. The app temporarily
+configures PA11/PA12 as inputs and stops the USB clock (a powered USB device
+holds D+ for about two seconds after a contact closes), then restores the saved
+register bits on exit. There is no PC link while the app is open.
 
-Run the host checks after generating assets with the normal build:
+A USB contact change must read the same on five consecutive polls, about 5 ms,
+before a straight-key edge or keyer start is accepted.
 
-```sh
-python App/apps/cwusb/test/arming.py
-python App/apps/cwusb/test/functional.py
-python App/apps/cwusb/test/waveforms.py
-```
+The common RF keying, CW receive, timing, sidetone and protection behavior is
+documented in the sibling [`CW Keyer` README](../cwkeyer/README.md).
 
-Python 3 and a C11 host compiler are required; `HOST_CC` overrides `gcc`.
-The arming suite has 41 checks. The combined suite has 1277 controls (including
-the historical 1250), plus 144 engine scenarios with historical trace/time
-comparisons. Together these cover the two inputs, real-time qualification, long squeeze,
-release gating, API/TX refusal, RX/TX cycles, short requests, EXIT and the
-STRAIGHT limit/release regression. The host substitutes GPIO/API callbacks;
-it cannot validate physical RF or electrical contacts.
+## Validation and known USB-C limit
 
-The board may mask contacts briefly after inactivity, and the existing
-STRAIGHT filter can miss very short pulses. Removing the repeated arming
-press does not prove those electrical effects or RF preparation latency have
-disappeared. The S-meter and receive-audio transitions remain; periodic RSSI
-reads are suspended while locked and resume when operational.
+- The USB input path in the original combined CW Keyer was tested on a UV-K1
+  (Labs v6.2.0) with a straight key and paddle in both plug orientations. The
+  PC link returned after exit, and no false elements appeared with the paddle
+  lead close to the antenna at high power into a dummy load. The original
+  implementation and test record are in
+  [PR #665](https://github.com/armel/uv-k1-k5v3-firmware-custom/pull/665).
+- The arming gesture and the `AUTO` / `IAMB A` / `IAMB B` keyer were tested by
+  F4LPF on a UV-K5 V3 (Labs, API level 3), and on a UV-K1 by F4WAT.
+- Host tests, run from the repository root after a normal build (Python 3 and
+  a C11 host compiler, `HOST_CC` overrides `gcc`; they need an ELF host such
+  as Linux):
 
-The final combined development was hardware-tested by F4LPF on UV-K5 V3 with
-Labs API3 at 494bc6af. Arming, mode display/selection, CW and IAMB A squeeze
-were satisfactory. The combined APP rebuilt against the current development branch is byte-identical
-to that tested binary. No hardware test of the newer resident firmware is
-claimed; RF validation is not exhaustive. For the
-original adapter implementation and hardware record see [PR #665](https://github.com/armel/uv-k1-k5v3-firmware-custom/pull/665)
-and the sibling [CW Keyer README](../cwkeyer/README.md).
+  ```sh
+  python App/apps/cwusb/test/arming.py
+  python App/apps/cwusb/test/functional.py
+  python App/apps/cwusb/test/waveforms.py
+  ```
 
-Functional design, USB-C cable and hardware testing: F4LPF. Implementation and
-software tests: OpenAI Codex. Technical assistance and contribution preparation:
-ChatGPT. Existing project and USB-input authorship notices are retained.
+  They compile the app source against simulated GPIO and API callbacks: they
+  cover arming, keying and the three keyer modes, not RF or the electrical
+  contacts.
+- After about 0.5 s without contact, the radio's USB-C path reports a closing
+  contact as closed for only 3 to 10 ms, then as open for about 150 to 220 ms
+  while it is still held, before it follows the contact again. When that first
+  closed reading is shorter than the contact debounce (about 5 ms), the first
+  element starts roughly 200 ms late. The debounce timing implies a second
+  case, not yet observed on the radio: a longer first reading starts the
+  keying at once, then the contact reads open. In `STRAIGHT`, a short carrier
+  is then followed by about 200 ms of silence before the intended mark; in
+  `PADDLE`, a held paddle can stop after the first element until the window
+  ends. The measurements and investigation are tracked in
+  [issue #683](https://github.com/armel/uv-k1-k5v3-firmware-custom/issues/683).
+  Up to version 1.2, the first paddle press after a return to receive only
+  prepared the transmitter and absorbed this window; since the one-time arming
+  gesture, that press keys at once.
+- The K-plug line PA10 is not used as a paddle input: it follows the PTT
+  button on the bench.
+
+## Contributing
+
+CW USB has no keyer source of its own: `cwusb_app.c` sets `CW_KEYER_USB` to 1
+and includes [`../cwkeyer/cwkeyer_app.c`](../cwkeyer/cwkeyer_app.c). The
+keyer, CW receive, display, settings and RF keying are shared with CW Keyer.
+
+- Any change outside an `#if CW_KEYER_USB` block also changes CW Keyer.
+  Behavior that only concerns the USB-C input (contact sampling, debounce or
+  start rules, the arming gesture, the iambic keyer, port setup) goes under
+  `#if CW_KEYER_USB`, preferably in USB-only functions called from the shared
+  loop rather than as conditionals scattered through shared functions.
+- A change that benefits both apps stays in the shared code and must be tested
+  in both: SIDE and PTT keying in CW Keyer, USB-C and PTT keying in CW USB.
+- USB-only texts go in [`../cwkeyer/gen_assets.py`](../cwkeyer/gen_assets.py)
+  behind `USB_VARIANT`; each app gets its own generated asset offsets.
+- `config_t` is shared. Its last byte, `reservedPort`, now holds the CW USB
+  keyer mode (0 `AUTO`, 1 `IAMB A`, 2 `IAMB B`; CW Keyer always saves 0), so
+  no spare byte is left. Changing the `config_t` layout or `CFG_MAGIC` resets
+  the settings of both apps.
+- Each app has its own `APP_VER` in its `build.sh`: a USB-only change bumps
+  CW USB, a shared change bumps both.
+- Build both apps after every change to the shared source:
+  `./compile-app.sh cwkeyer cwusb`. Each build fails if its binary exceeds
+  the 4 KiB overlay. CW USB has very little room left.
+
+## Credits
+
+- CW USB application, USB-C paddle port, paddle keyer and contact debounce:
+  Johan Denoyer F4WAT ([@jdenoy](https://github.com/jdenoy)).
+- One-time arming gesture and `IAMB A` / `IAMB B` keyer modes: Sébastien
+  F4LPF ([@lemiller-dev](https://github.com/lemiller-dev)), implemented and
+  tested with OpenAI Codex and ChatGPT.
+- Original CW Keyer base: Armel F4HWN
+  ([@armel](https://github.com/armel)).
+- USB-C wiring based on KI6CR's CW adapter for the UV-K5 V3.
+- TX sidetone approach: NR7Y's CW implementation.
