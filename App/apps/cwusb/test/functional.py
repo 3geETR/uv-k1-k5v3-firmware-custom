@@ -69,7 +69,7 @@ int main(void){
   setup(mode,0);for(unsigned i=0;i<6000;i++)sample(1000,mode?3:1,APP_KEY_INVALID);assert(!g.armState);cases++;
   setup(mode,0);releaseInitial();sample(1000,mode?3:1,APP_KEY_INVALID);
   for(unsigned i=0;i<4900;i++)sample(1000,mode?3:1,APP_KEY_INVALID);
-  sample(1000,mode?1:0,APP_KEY_INVALID);assert(g.armState==2);hold(mode?3:1,1000);sample(1000,0,APP_KEY_INVALID);sample(1000,mode?3:1,APP_KEY_INVALID);assert(g.armState==4);releaseFinal();cases++;
+  sample(1000,0,APP_KEY_INVALID);assert(g.armState==2);hold(mode?3:1,1000);sample(1000,0,APP_KEY_INVALID);sample(1000,mode?3:1,APP_KEY_INVALID);assert(g.armState==4);releaseFinal();cases++;
   setup(mode,0);releaseInitial();sample(1000,mode?3:1,APP_KEY_INVALID);sample(100000,mode?3:1,APP_KEY_INVALID);assert(g.armState==3);unsigned stamp=g.armSince;
   sample(1000,mode?3:1,APP_KEY_PTT);assert(g.armState==2);assert(stamp);cases++;
   setup(mode,0);releaseInitial();sample(1000,mode?3:1,APP_KEY_INVALID);adjustSetting(APP_KEY_1,1);assert(g.armState==0);cases++;

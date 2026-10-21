@@ -774,9 +774,11 @@ static bool armUsb(uint8_t key)
     const uint32_t now = A->cycles_48mhz();
     if (now - g.lastVal > 2400000u) state &= ~1u;
     g.lastVal = now;
-    const unsigned contacts = usbContacts() | (key == APP_KEY_PTT ? 4u : 0u);
-    const unsigned target = state == 2u || state == 3u
-        ? (g.mode == MODE_STRAIGHT ? 1u : 3u) : 0u;
+    /* TIP only, in both modes: a mono plug (RING grounded) can arm, and the
+     * gesture does not depend on STRAIGHT / PADDLE. A paddle squeeze holds
+     * TIP too, so it still arms. */
+    const unsigned contacts = (usbContacts() & 1u) | (key == APP_KEY_PTT ? 4u : 0u);
+    const unsigned target = (state >> 1) == 1u; /* hold phase: TIP closed */
     if (contacts != target) {
         g.armState = state & ~1u;
     } else if (!(state & 1u)) {
