@@ -25,6 +25,13 @@ a.text("T_SPEED", "WPM ")
 a.text("T_RX_PITCH", "TONE ")
 a.text("T_BREAKIN", "BK ")
 a.text("T_XTAL", "XTAL ")
+# Existing App/bitmaps.c glyphs, copied verbatim: BITMAP_VFO_Lock and
+# BITMAP_Ready (the latter is retained there in a commented resource block).
+# asset_read is app-local: these existing designs must be packed here.
+if USB_VARIANT:
+    a.u8("BMP_LOCK", [0x3c, 0x26, 0x25, 0x25, 0x25, 0x26, 0x3c])
+    a.u8("BMP_READY", [0x08, 0x10, 0x20, 0x10, 0x08, 0x04, 0x02])
+
 a.u8("BMP_F", [0x3E, 0x7F, 0x41, 0x75, 0x75, 0x75, 0x7D, 0x7F, 0x3E])
 a.u8("BMP_SPEAKER", [0x1C, 0x1C, 0x3E, 0x7F, 0x00,
                      0x22, 0x1C, 0x41, 0x22, 0x1C])
