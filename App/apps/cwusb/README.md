@@ -11,8 +11,8 @@ Use overlay ABI 1 / API level 3 with the silent `tx_prepare` service (table
 size at least 368 bytes). Older tables fail closed. No resident changes are
 required. From the repository root, run `./compile-app.sh cwusb`; the output
 is `build/Apps/CWUSB.app`. Use a free application slot for experiments.
-The existing ARM GCC 13.3.rel1 build uses a 4096-byte overlay; this arming-only
-step occupies 3916 bytes. Stack usage is outside that figure.
+The existing ARM GCC 13.3.rel1 build uses a 4096-byte overlay; this combined
+version occupies 4088 bytes (8 bytes free). Stack usage is outside that figure.
 
 ## Deliberate arming, once per launch
 
@@ -41,12 +41,29 @@ on release so it cannot restart TX without a fresh valid contact.
 - USB D+ / TIP: straight key in STRAIGHT, dit in PADDLE.
 - USB D- / RING: dah in PADDLE.
 - `1`: STRAIGHT / PADDLE; `5`: reverse dit/dah.
+- `8`: cycle AUTO / IAMB A / IAMB B while idle; the visible label sits
+  between the setting capsules, clear of the S-meter and battery.
 - `0`: receive speaker; `2`: WPM; `3`: RX pitch; `4`: break-in; `6`: XTAL.
 - `F`, then `2`, `3`, `4`, or `6`: decrease the corresponding setting.
 - `UP` / `DOWN`: local tuning in 100 Hz steps, up to +/-50 kHz.
 - `MENU`: help; `EXIT`: close. EXIT works during arming. In STRAIGHT,
   a held keying control can take priority until released; do not treat EXIT
   as a separately validated emergency RF cutoff.
+
+## Paddle algorithms and persistence
+
+AUTO retains the original alternating/repeating paddle behavior without
+opposite-contact memory. IAMB A remembers a qualified isolated opposite tap;
+releasing a squeeze does not queue an extra opposite element solely because
+of the squeeze. IAMB B additionally remembers a squeeze during the mark,
+including the ramps, and completes the opposite element after release. A
+squeeze occurring only in the space does not queue that tail.
+
+Key 8 is refused during a prepared TX session or active element; release and
+wait for RX before retrying. The selected mode uses the existing reserved
+configuration byte (0=AUTO, 1=A, 2=B); invalid values select AUTO. Old USB
+settings wrote zero here and retain AUTO. No configuration growth or new
+resident service is required. Arming itself is never persistent.
 
 ## Adapter and configuration
 
@@ -73,10 +90,14 @@ Run the host checks after generating assets with the normal build:
 
 ```sh
 python App/apps/cwusb/test/arming.py
+python App/apps/cwusb/test/functional.py
+python App/apps/cwusb/test/waveforms.py
 ```
 
 Python 3 and a C11 host compiler are required; `HOST_CC` overrides `gcc`.
-The 41 checks cover the two inputs, real-time qualification, long squeeze,
+The arming suite has 41 checks. The combined suite has 1277 controls (including
+the historical 1250), plus 144 engine scenarios with historical trace/time
+comparisons. Together these cover the two inputs, real-time qualification, long squeeze,
 release gating, API/TX refusal, RX/TX cycles, short requests, EXIT and the
 STRAIGHT limit/release regression. The host substitutes GPIO/API callbacks;
 it cannot validate physical RF or electrical contacts.
@@ -89,8 +110,9 @@ reads are suspended while locked and resume when operational.
 
 The final combined development was hardware-tested by F4LPF on UV-K5 V3 with
 Labs API3 at 494bc6af. Arming, mode display/selection, CW and IAMB A squeeze
-were satisfactory. This intermediate arming-only commit was tested on host,
-not independently on hardware; RF validation is not exhaustive. For the
+were satisfactory. The combined APP rebuilt against the current development branch is byte-identical
+to that tested binary. No hardware test of the newer resident firmware is
+claimed; RF validation is not exhaustive. For the
 original adapter implementation and hardware record see [PR #665](https://github.com/armel/uv-k1-k5v3-firmware-custom/pull/665)
 and the sibling [CW Keyer README](../cwkeyer/README.md).
 

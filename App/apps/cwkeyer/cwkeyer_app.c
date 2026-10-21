@@ -27,6 +27,8 @@
  * dahs, alternating on a squeeze, no paddle memory). get_key() reports one key
  * only, so a squeeze is visible only in the USB variant, whose two contacts are
  * sampled together from GPIOA_IDR. The SIDE variant is a single-paddle keyer.
+ * Experimental CW_USB_IAMBIC adds USB-only opposite-paddle memory and
+ * runtime AUTO/A/B selection, USB key 8 and deferred configuration saving.
  *
  * In the USB variant, the app sets PA11/PA12 to inputs with pull-up and stops
  * the USB clock on entry (a powered USB device holds D+ for about two seconds
@@ -58,6 +60,17 @@
 #ifndef CW_KEYER_USB
 #define CW_KEYER_USB 0
 #endif
+
+/* Experimental engine only: 0 = original AUTO, 1 = shared AUTO/A/B engine.
+ * USB key 8 selects the algorithm; the legacy 12-byte layout is retained.
+ * Non-USB builds keep their original code and assets. */
+#ifndef CW_USB_IAMBIC
+#define CW_USB_IAMBIC 1
+#endif
+#if CW_USB_IAMBIC < 0 || CW_USB_IAMBIC > 1
+#error "CW_USB_IAMBIC must be 0 (AUTO) or 1 (runtime AUTO/A/B)"
+#endif
+#define IAMBIC_ENGINE (CW_KEYER_USB && CW_USB_IAMBIC)
 
 #if !CW_KEYER_USB
 #include "cwkeyer_assets.h"
@@ -174,10 +187,14 @@ typedef struct {
     uint8_t magic, wpm, mode, reverse;
     int16_t calSteps;
     uint16_t rxPitchHz, breakInMs;
-    uint8_t speaker, reservedPort; /* Reserved, written as zero. */
+    uint8_t speaker, reservedPort; /* USB: AUTO/A/B = 0/1/2; SIDE: zero. */
 } config_t;
 
 _Static_assert(sizeof(config_t) <= 16u, "CW Keyer config exceeds overlay slot");
+#if IAMBIC_ENGINE
+_Static_assert(sizeof(config_t) == 12u && __builtin_offsetof(config_t, reservedPort) == 11u,
+               "CW USB legacy config layout must stay compatible");
+#endif
 
 /* Field order follows the Thumb-1 load/store immediate ranges: bytes first
  * (offsets up to 31), then halfwords (up to 62), then words (up to 124). A
@@ -196,6 +213,9 @@ static struct {
     uint8_t smMs;
 #if CW_KEYER_USB
     uint8_t ampMs;   /* amplifier on in that many service milliseconds */
+#if IAMBIC_ENGINE
+    uint8_t iambic; /* element bits 0/1, mark 2, pending 3, mode 4/5 */
+#endif
 #endif
     int16_t calSteps, tuneOffset10Hz;
     uint16_t rxPitchHz, breakInMs, xtalBase;
@@ -227,6 +247,16 @@ static struct {
 
 #define A (g.A)
 
+#if IAMBIC_ENGINE
+enum { IAMBIC_AUTO = 0u, IAMBIC_A = 16u, IAMBIC_B = 32u };
+/* Foreground only: callers pass AUTO/A/B. Busy requests are refused; retry
+ * after RX. The UI now keeps every mode reachable without volatile state. */
+static void setIambicMode(unsigned mode)
+{
+    if (!g.txReady && !(g.iambic & 3u))
+        g.iambic = (uint8_t)mode;
+}
+#endif
 
 static char *text(char *buf, uint16_t offset)
 {
@@ -429,7 +459,12 @@ static void drawStatus(uint16_t title, uint8_t titleChars)
     char t[TEXT_MAX];
     a->print_inverse(text(t, title), 2u, 0u, true, true,
                      (uint8_t)(2u + titleChars * 4u));
+#if IAMBIC_ENGINE
+    a->print_tiny(text(t, T_VERSION + (g.iambic >> 4) * T_VERSION_STRIDE),
+                  48u, 33u, false, true);
+#else
     a->print_tiny(text(t, T_VERSION), 92u, 1u, true, false);
+#endif
     a->draw_battery();
 }
 
@@ -639,6 +674,9 @@ static void sidetone(bool on)
     A->bk_write(REG_TONE_FREQ, on ? toneControlWord(g.rxPitchHz) : 0u);
 }
 
+#if IAMBIC_ENGINE
+static void rememberPaddle(void);
+#endif
 
 /* PA bias in four 1 ms steps, 1/4, 1/2, 3/4 and full drive going up, the
  * same levels the other way down to 0. */
@@ -650,6 +688,9 @@ static void rampBias(bool up)
     for (uint8_t i = 1u; i <= 4u; i++) {
         writeBias(level[up ? i : 4u - i]);
         A->delay_ms(1u);
+#if IAMBIC_ENGINE
+        rememberPaddle();
+#endif
     }
 }
 
@@ -793,6 +834,27 @@ static uint8_t debounced(uint8_t p)
     return g.padStable;
 }
 
+#if IAMBIC_ENGINE
+/* Two equal observations qualify active memory; starts retain the existing
+ * USB confirmation/arming. A remembers isolated opposite taps. B additionally
+ * remembers a squeeze during the mark, including both RF ramps. A squeeze
+ * appearing only in the space does not queue a tail. No active element means
+ * no memory, so PTT and the USB arming press cannot seed the next sequence. */
+static void rememberPaddle(void)
+{
+    const uint8_t state = g.iambic;
+    if (state < IAMBIC_A || !(state & 3u))
+        return;
+    const uint8_t p = paddles(APP_KEY_INVALID);
+    if (p != g.padRaw) {
+        g.padRaw = p;
+        return;
+    }
+    if (p == ((state & 3u) ^ 3u) ||
+        (p == 3u && (state & 36u) == 36u))
+        g.iambic = state | 8u;
+}
+#endif
 
 /* Called by keyOn only, after tx_state has allowed the transmission. */
 static void prepareTx(void)
@@ -968,6 +1030,9 @@ static bool keyerWait(uint16_t ms)
     ticksSince();
     for (;;) {
         const uint8_t key = A->get_key();
+#if IAMBIC_ENGINE
+        rememberPaddle();
+#endif
         const uint32_t spent = ticksSince();
         if (key != APP_KEY_EXIT) {
             g.exitTicks = 0u;
@@ -997,6 +1062,9 @@ static void runPaddle(uint8_t p)
 #else
         const uint8_t el = p;
 #endif
+#if IAMBIC_ENGINE
+        g.iambic = (g.iambic & 48u) | el | 4u;
+#endif
         if (!keyOn())
             break;
         const uint16_t dot = dotMs();
@@ -1005,13 +1073,23 @@ static void runPaddle(uint8_t p)
          * 1:1 mark/space at the half-drive points and an exact 2-dot period. */
         const bool done = keyerWait((uint16_t)((el == P_DAH ? 3u * dot : dot) - RAMP_MS - 1u));
         keyOff();
+#if IAMBIC_ENGINE
+        g.iambic &= (uint8_t)~4u;
+#endif
         if (!done || !keyerWait((uint16_t)(dot - RAMP_MS + 1u)))
             break;
 #if CW_KEYER_USB
         last = el;
 #endif
+#if IAMBIC_ENGINE
+        p = g.iambic & 8u ? (el ^ 3u) : paddles(A->get_key());
+#else
         p = paddles(A->get_key());
+#endif
     }
+#if IAMBIC_ENGINE
+    g.iambic &= 48u;
+#endif
 }
 
 /* One step up or down, refused when it would leave [lo, hi]: the bounded
@@ -1117,6 +1195,13 @@ static void handleUiKey(uint8_t key)
     }
 
     switch (key) {
+#if IAMBIC_ENGINE
+        case APP_KEY_8:
+            setIambicMode(g.iambic < IAMBIC_B ? g.iambic + 16u : IAMBIC_AUTO);
+            g.fArm = false;
+            g.redraw = true;
+            break;
+#endif
         case APP_KEY_EXIT:
             g.running = false;
             break;
@@ -1225,6 +1310,12 @@ static void loadConfig(void)
         ? cfg.breakInMs : BREAKIN_DEFAULT;
     g.speaker = cfg.magic == CFG_MAGIC && cfg.speaker <= 1u
         ? cfg.speaker : true;
+#if IAMBIC_ENGINE
+    /* Only app entry calls loadConfig, before TX or any element. Older
+     * USB configs wrote zero here; absent/invalid bytes select AUTO. */
+    g.iambic = cfg.magic == CFG_MAGIC && cfg.reservedPort <= 2u
+        ? (uint8_t)(cfg.reservedPort << 4) : IAMBIC_AUTO;
+#endif
 }
 
 static void saveConfig(void)
@@ -1232,7 +1323,11 @@ static void saveConfig(void)
     const config_t cfg = {
         CFG_MAGIC, g.wpm, g.mode, (uint8_t)g.reverse, g.calSteps,
         g.rxPitchHz, g.breakInMs, (uint8_t)g.speaker,
+#if IAMBIC_ENGINE
+        (uint8_t)(g.iambic >> 4)
+#else
         0u
+#endif
     };
     A->cfg_save((const uint8_t *)&cfg, sizeof(cfg));
 }
