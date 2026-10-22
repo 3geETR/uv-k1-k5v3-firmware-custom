@@ -50,7 +50,8 @@
  *      handoff / handoff_read, tx_prepare; the Labs system information slots
  *      become part of the layout in every build, so level 3 services have one
  *      offset; serial_read / serial_write / serial_ctl (the USB-C serial
- *      port, K-plug reserved; APP_CAP_SERIAL) */
+ *      port, K-plug reserved; APP_CAP_SERIAL); blit_page, lcd_feed,
+ *      viewer_update (the LCD without the K5Viewer side effect) */
 #define APP_ABI_MAJOR  1u
 #define APP_API_LEVEL  3u
 
@@ -407,6 +408,26 @@ typedef struct app_api {
     uint16_t (*serial_read)(uint8_t port, void *buf, uint16_t len);
     bool     (*serial_write)(uint8_t port, const void *buf, uint16_t len);
     uint8_t  (*serial_ctl)(uint8_t port, uint32_t baud);
+
+    /* ---- API level 3: the LCD without the K5Viewer side effect ----
+     * blit_page: one LCD page, 0 the status line, 1-7 a frame buffer line, 8
+     * the 7 of them (blit_status and blit_full are 0 and 8, but blit_full and
+     * blit_line also send a blocking K5Viewer frame).
+     * lcd_feed: the screen a few bytes at a time, for an app that sends it
+     * between its audio samples (a whole-screen blit, an 11 ms burst on the
+     * LCD SPI, is heard as a flutter while the speaker is on). 0 starts a
+     * frame; n > 0 sends its next n bytes (10.7 us each, 1048 in all: per
+     * page, 3 command bytes then 128 data bytes, from the status line), each
+     * one done before it returns. True while bytes remain. The status line
+     * and the frame buffer are read as the bytes go: change them only once a
+     * frame is out. Any blit may follow; lcd_feed(0) then starts over.
+     * viewer_update: a K5Viewer frame of the status line and the frame buffer,
+     * for an app that does not use blit_full; nothing when no viewer is
+     * connected. Blocking: short on USB, up to ~0.3 s for a full frame on the
+     * K-plug at 38400 bauds. */
+    void     (*blit_page)(uint8_t page);
+    bool     (*lcd_feed)(unsigned n);
+    void     (*viewer_update)(void);
 } app_api_t;
 
 /* Serial ports and serial_ctl state bits (API level 3). */
@@ -425,7 +446,8 @@ _Static_assert(offsetof(app_api_t, sys_edition) == 276u &&
 _Static_assert(offsetof(app_api_t, handoff) == 356u &&
                offsetof(app_api_t, tx_prepare) == 364u &&
                offsetof(app_api_t, serial_read) == 368u &&
-               sizeof(app_api_t) == 380u,
+               offsetof(app_api_t, blit_page) == 380u &&
+               sizeof(app_api_t) == 392u,
                "app_api_t is append-only: every edition shares this layout");
 
 /* Wrap-safe modular ordering for deadlines less than half a cycle-counter

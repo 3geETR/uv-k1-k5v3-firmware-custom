@@ -213,6 +213,14 @@ static void app_blit_full(void)
 }
 #endif
 
+/* API level 3: a K5Viewer frame without the LCD blit (lcd_feed's apps). */
+static void app_viewer_update(void)
+{
+#ifdef ENABLE_FEAT_F4HWN_K5VIEWER
+    K5VIEWER_Update(false);
+#endif
+}
+
 #ifdef APP_SERIAL
 /* ---- API level 3: serial ports ----
  * USB only for now: APP_SERIAL_KPLUG reports no port (serial_ctl 0).  The
@@ -1279,6 +1287,9 @@ static const app_api_t app_api = {
     .serial_write        = app_serial_write,
     .serial_ctl          = app_serial_ctl,
 #endif
+    .blit_page           = ST7565_BlitScreen,
+    .lcd_feed            = ST7565_Feed,
+    .viewer_update       = app_viewer_update,
 };
 
 /* Hand-off guards: a chain of apps that hand off to each other for ever (a
