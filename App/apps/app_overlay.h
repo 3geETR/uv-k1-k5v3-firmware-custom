@@ -169,6 +169,10 @@ uint8_t APP_ValidateSlot(uint8_t slot, app_header_t *out_header);
  * internal flash is never touched while an overlay is executing. */
 uint8_t APP_LaunchOverlay(uint8_t slot);
 
+/* Set when an app staged a VFO (vfo_stage): the Apps menu then hands back to
+ * the main screen, and clears it. */
+extern bool gAppVfoExit;
+
 /* An open RX audio capture (af_capture_open) holds the ADC on PA4: Yield puts
  * the battery channel back for one conversion and returns whether it did, Resume
  * takes PA4 back. Used by BOARD_ADC_GetBatteryInfo(). */
