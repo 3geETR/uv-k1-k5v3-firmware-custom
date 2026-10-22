@@ -38,9 +38,10 @@ beam_rx_poll beam_draw ticks_ms rand32 asset_read idivmod uidivmod sys_edition
 sys_version sys_build_date sys_build_time sys_build_commit sys_flash_end sys_ram_end
 sys_battery_voltage sys_battery_type sys_battery_percent sys_storage_read
 sys_stack_free_now sys_stack_free_min append_i32 af_capture_open af_capture_sample
-af_capture_close cycles_48mhz draw_frequency append_u32""".split()
+af_capture_close cycles_48mhz draw_frequency append_u32 handoff handoff_read
+tx_prepare serial_read serial_write serial_ctl blit_page lcd_feed viewer_update""".split()
 API_SIZE = 4 + 4 * len(API_NAMES)
-assert API_SIZE == 356
+assert API_SIZE == 392
 
 RAM, RAM_SZ = 0x20000000, 0x40000
 API = 0x20030000
@@ -122,7 +123,7 @@ class Emu:
             self.ret(self.keys(self))
         elif name in ("blit_full",):          # 7 x 128 B at SPI 750 kHz (DIV64)
             self.T += BLIT_PAGE * 7; self.blits += 1
-        elif name in ("blit_status", "blit_line"):
+        elif name in ("blit_status", "blit_line", "blit_page"):
             self.T += BLIT_PAGE
         elif name == "delay_ms":
             self.T += self.r(0) * 48000
