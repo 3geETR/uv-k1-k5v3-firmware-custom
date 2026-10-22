@@ -428,6 +428,18 @@ typedef struct app_api {
     void     (*blit_page)(uint8_t page);
     bool     (*lcd_feed)(unsigned n);
     void     (*viewer_update)(void);
+
+    /* ---- API level 3: set the VFO on exit (builds with the BEAM bridge) ----
+     * Stage a VFO setting: the loader applies it to the current VFO after
+     * app_main() returns (frequency, offset, codes, modulation, bandwidth,
+     * power, step), before it launches a hand-off target or returns to the
+     * main screen, where it then goes. The VFO is saved as a keypad entry
+     * saves it. One staging per run, shared with beam_save: false when one is
+     * already pending or the frequency is out of the radio's range. Only the
+     * frequency is checked: the other fields are taken as they are, as with
+     * beam_save, so start from beam_get and change what is needed. NULL on a
+     * build without the BEAM bridge. */
+    bool     (*vfo_stage)(const app_beam_channel_t *ch);
 } app_api_t;
 
 /* Serial ports and serial_ctl state bits (API level 3). */
@@ -447,7 +459,8 @@ _Static_assert(offsetof(app_api_t, handoff) == 356u &&
                offsetof(app_api_t, tx_prepare) == 364u &&
                offsetof(app_api_t, serial_read) == 368u &&
                offsetof(app_api_t, blit_page) == 380u &&
-               sizeof(app_api_t) == 392u,
+               offsetof(app_api_t, vfo_stage) == 392u &&
+               sizeof(app_api_t) == 396u,
                "app_api_t is append-only: every edition shares this layout");
 
 /* Wrap-safe modular ordering for deadlines less than half a cycle-counter

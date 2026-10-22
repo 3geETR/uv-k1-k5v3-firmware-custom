@@ -156,6 +156,9 @@ static struct {
     uint8_t handoff_buf[APP_HANDOFF_MAX];
 } app_state;
 
+/* vfo_stage: the Apps menu hands back to the main screen (app_menu.c). */
+bool gAppVfoExit;
+
 /* ---- ABI wrappers: the few resident calls that are not a direct signature match ---- */
 
 static void app_backlight_on(void)
@@ -489,6 +492,21 @@ static uint16_t app_beam_save(const app_beam_channel_t *in)
     return channel;
 }
 
+/* vfo_stage: the same staging as beam_save, aimed at the current VFO (its
+ * frequency channel) instead of the first free memory. */
+static bool app_vfo_stage(const app_beam_channel_t *in)
+{
+    if (in == NULL || app_state.beam_dirty)
+        return false;
+    if (RX_freq_check(in->rx_frequency))       /* the radio's RX range, as the keypad */
+        return false;
+    memcpy(&app_beam_pending, in, sizeof(app_beam_pending));
+    app_state.beam_pending_channel = FREQ_CHANNEL_FIRST + FREQUENCY_GetBand(in->rx_frequency);
+    app_state.beam_dirty = true;
+    gAppVfoExit = true;
+    return true;
+}
+
 /* Called only after the overlay has returned and its code no longer executes
  * from the PY25Q16 sector cache. */
 static void app_beam_commit(void)
@@ -516,11 +534,15 @@ static void app_beam_commit(void)
     app_beam_vfo.Name[sizeof(app_beam_vfo.Name) - 1u] = '\0';
 
     SETTINGS_SaveChannel(channel, gEeprom.TX_VFO, &app_beam_vfo, 3);
+    if (IS_MR_CHANNEL(channel)) {
 #ifndef ENABLE_KEEP_MEM_NAME
-    SETTINGS_SaveChannelName(channel, app_beam_vfo.Name);
+        SETTINGS_SaveChannelName(channel, app_beam_vfo.Name);
 #endif
-
-    gEeprom.MrChannel[gEeprom.TX_VFO] = channel;
+        gEeprom.MrChannel[gEeprom.TX_VFO] = channel;
+    } else {                              /* vfo_stage: the VFO, as a keypad entry */
+        gEeprom.FreqChannel[gEeprom.TX_VFO] = channel;
+        SETTINGS_SaveVfoIndices();
+    }
     gEeprom.ScreenChannel[gEeprom.TX_VFO] = channel;
     RADIO_ConfigureChannel(gEeprom.TX_VFO, VFO_CONFIGURE_RELOAD);
     RADIO_SelectVfos();
@@ -1290,6 +1312,9 @@ static const app_api_t app_api = {
     .blit_page           = ST7565_BlitScreen,
     .lcd_feed            = ST7565_Feed,
     .viewer_update       = app_viewer_update,
+#ifdef ENABLE_FEAT_F4HWN_OVERLAY_BEAM
+    .vfo_stage           = app_vfo_stage,
+#endif
 };
 
 /* Hand-off guards: a chain of apps that hand off to each other for ever (a
