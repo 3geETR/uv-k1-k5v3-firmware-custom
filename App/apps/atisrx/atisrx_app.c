@@ -27,8 +27,8 @@
  * at 9.6 kHz, timed from SysTick, continuously: no RSSI gate, the check bits
  * and the error check sort sequences from noise. Each sample goes through the
  * demodulator modelled and tested in test/model_rx.py: band-pass, 1300/2100 Hz
- * sliding correlators over one bit, per-tone AGC, then 3 slicers (weights 2:3,
- * 1:1, 3:2), each with its DPLL and its sequence decoder. Keep the two in step.
+ * sliding correlators over one bit, per-tone AGC, then 3 slicers (weights 5:4,
+ * 4:3, 7:5), each with its DPLL and its sequence decoder. Keep the two in step.
  * Keys and the screen cost sample time (the key scan alone is ~400 us), so they
  * are served every 50 ms only while no slicer is inside a sequence; the redraw
  * follows a new station, a key, or every 5 s (battery, age).
@@ -481,9 +481,13 @@ static void listen(void){
     sl_t sl[NSL];
     memset(sl,0,sizeof sl);
     A->asset_read(DEMOD_INIT,&d,sizeof d);  /* initial state, then both cosine tables */
-    sl[0].wa=2; sl[0].wb=3;      /* favours B (2100 Hz) */
-    sl[1].wa=1; sl[1].wb=1;
-    sl[2].wa=3; sl[2].wb=2;      /* favours Y (1300 Hz) */
+    /* Decision weights 1300 : 2100 Hz (test/model_rx.py, Demod): on ADC
+     * samples captured on a UV-K1 (ATIS DSC RX, which shares this front end),
+     * 5:4, 4:3 and 7:5 keep 99.5 to 100 % of the bits right; the former 2:3,
+     * 1:1 and 3:2 fell to about 60, 70 and 84 % (issue #705) */
+    sl[0].wa=5; sl[0].wb=4;
+    sl[1].wa=4; sl[1].wb=3;
+    sl[2].wa=7; sl[2].wb=5;
 
     /* The two per-sample services, held in registers: their table slots lie
      * past the ldr immediate range. */
