@@ -51,7 +51,8 @@
  *      become part of the layout in every build, so level 3 services have one
  *      offset; serial_read / serial_write / serial_ctl (the USB-C serial
  *      port, K-plug reserved; APP_CAP_SERIAL); blit_page, lcd_feed,
- *      viewer_update (the LCD without the K5Viewer side effect) */
+ *      viewer_update (the LCD without the K5Viewer side effect), vfo_stage
+ *      (deferred update of the current VFO) */
 #define APP_ABI_MAJOR  1u
 #define APP_API_LEVEL  3u
 

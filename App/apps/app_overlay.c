@@ -1523,6 +1523,7 @@ uint8_t gAppLastSlot;
  * that failed to launch.  A runaway-chain guard returns APP_CHAIN_ABORTED. */
 uint8_t APP_LaunchOverlay(uint8_t slot)
 {
+    gAppVfoExit = false;   /* result belongs only to this top-level launch */
     uint8_t fast_hops = 0;
     app_state.handoff_unread = false;   /* a menu or shortcut launch carries no message */
     for (;;) {
