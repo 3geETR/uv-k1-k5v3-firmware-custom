@@ -20,7 +20,7 @@ APPS_DIR=App/apps
 OUT_DIR=build/Apps
 OVERLAY_MAX=4096
 APP_VMA=${APP_VMA:-0x20000280}      # pinned overlay VMA (Core/py32f071xb.ld)
-ALL_EXCLUDED_APPS=(handoffa handoffb) # API test apps remain explicit targets
+ALL_EXCLUDED_APPS=(handoffa handoffb vfotest) # API test apps remain explicit targets
 
 cd "$(dirname "$0")"
 
