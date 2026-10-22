@@ -174,8 +174,8 @@ AF Scope and AF Spectro are one instrument for the demodulated RX audio, split
 in two apps that hand off to each other with `MENU`: AF Scope is an
 oscilloscope (frequency counter, peak detect, persistence) and a tuner (the
 frequency of a steady tone against the nearest known tone); AF Spectro shows
-the spectrum and a sonogram and measures the Bell 202 twist of an APRS signal,
-to set APRS TX or the KISS TNC. Both work in FM, AM and USB.
+the spectrum and a sonogram, the two main peaks and the level difference
+between two tones (DTMF, FSK, Bell 202...). Both work in FM, AM and USB.
 
 > [!IMPORTANT]
 > Overlay apps, including APRS RX, APRS TX and APRS DIGI, are experimental and intended for
