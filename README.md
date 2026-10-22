@@ -148,7 +148,7 @@ The current app collection includes:
 - digital and signal apps: ACARS RX, AIS RX, ATIS RX, APRS RX, APRS TX, APRS Edit,
   APRS DIGI, KISS TNC, CW Decode, CW Keyer, CW USB, SSTV, POCSAG RX, Sonde M10,
   Sonde M20, Sonde RS41 and EPIRB 406,
-- tools and diagnostics: Resistor, System Info and Flash Map,
+- tools and diagnostics: AF Scope, AF Spectro, Resistor, System Info and Flash Map,
 - games and demos: Breakout, Cube3D, Hell Maze, Minesweeper, Plasma, Rapid Roll,
   Snake, Sokoban, Space Impact and Tetris.
 
@@ -169,6 +169,13 @@ label and printable message text.
 AIS RX samples the raw discriminator at 38.4 kHz, validates HDLC frames and
 shows Class A/B position and static reports from AIS1 or AIS2, one channel at a
 time. Its Flipper Zero bench vectors stay on 433.650 MHz.
+
+AF Scope and AF Spectro are one instrument for the demodulated RX audio, split
+in two apps that hand off to each other with `MENU`: AF Scope is an
+oscilloscope (frequency counter, peak detect, persistence) and a tuner (the
+frequency of a steady tone against the nearest known tone); AF Spectro shows
+the spectrum and a sonogram and measures the Bell 202 twist of an APRS signal,
+to set APRS TX or the KISS TNC. Both work in FM, AM and USB.
 
 > [!IMPORTANT]
 > Overlay apps, including APRS RX, APRS TX and APRS DIGI, are experimental and intended for
