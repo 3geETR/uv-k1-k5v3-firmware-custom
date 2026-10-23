@@ -380,6 +380,18 @@ static void onKey(uint8_t key,bool repeat){
 __attribute__((section(".text.entry"), used))
 void app_main(const app_api_t *api){
     g.api=api;
+    /* The sat_* services start at API level 4.  On a firmware whose table ends
+     * earlier, every sat_* call below would land on another service (a newer
+     * app against an older firmware) or an older app would call level-3
+     * services here; either way the store cannot be read.  Say so instead of
+     * showing "NO PASSES". */
+    if(api->api_size<(uint16_t)sizeof(app_api_t) || api->api_level<4u){
+        api->display_clear();
+        api->print_normal("UPDATE APP",0,127,2);
+        api->print_normal("REINSTALL",0,127,3);
+        while(api->get_key()!=APP_KEY_EXIT) api->delay_ms(50);
+        return;
+    }
     g.k1=A->nav_dir(APP_KEY_UP)<0;              /* SetNav LEFT/RIGHT (UV-K1) */
     A->sat_enter();
     g.sql=A->sat_squelch(0);

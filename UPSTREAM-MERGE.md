@@ -297,7 +297,50 @@ Yeni bir merge yaptığında bu tabloya bir satır ekle.
 
 ---
 
-## 9. Sık yapılan hatalar
+## 9. Sorun giderme: "NO PASSES" ama PC 16 pass görüyor
+
+Bu, **radyo boş değil** demektir: `sattrack.py radio` pass'leri okuyabiliyorsa
+store ve UART yolu sağlam. Neredeyse her zaman sebep, radyoya **merge öncesi
+derlenmiş eski `SatTrack.app`** kurulmuş olmasıdır:
+
+| | Eski app (API level 3) | Yeni firmware (v6.3.0) |
+|---|---|---|
+| ofset 328 | `crc16` | `append_i32` |
+| ofset 336 | `sat_read` | `af_capture_sample` |
+| ofset 364 | `sat_squelch` | `tx_prepare` |
+| ofset 404 | — | `sat_read` (doğru yer) |
+
+Eski app `sat_read` yerine `af_capture_sample` çağırır; tampon hiç dolmaz,
+indeksin `magic` alanı sıfır kalır ve uygulama "NO PASSES" çizer. Firmware bunu
+yakalayamaz: eski app'in `required_caps` değeri `0x40` (eski `APP_CAP_SAT`),
+yeni firmware'de bu bit artık `APP_CAP_SERIAL`'dır.
+
+Çözüm:
+
+```powershell
+./compile-app.sh sat            # veya CI'da "Build Firmware" -> Run workflow
+uv run tools/sattrack/sattrack.py install build/Apps/SatTrack.app
+```
+
+Kurulan dosyanın yeni olduğunu doğrula (`api_min` 4, sat yeteneği 0x80):
+
+```powershell
+$b=[IO.File]::ReadAllBytes('build/Apps/SatTrack.app')
+"api_min=$($b[7])  sat_cap=$((($b[56] -band 0x80) -ne 0))"
+```
+
+`api_min=4` ve `sat_cap=True` değilse yanlış/eski blob kuruluyor demektir.
+Menüdeki **8 Install the app on the radio** da varsayılan olarak
+`build/Apps/SatTrack.app` dosyasını kullanır.
+
+Yeni app, uyumsuz bir firmware'de çalıştırılırsa artık "NO PASSES" yerine
+**UPDATE APP / REINSTALL** gösterip EXIT bekler (`app_main` başındaki
+`api_size`/`api_level` kontrolü). Yine de eski app'i firmware tarafında ayırt
+etmenin güvenilir bir yolu yoktur; doğru app'i yeniden kurmak gerekir.
+
+---
+
+## 10. Sık yapılan hatalar
 
 - **`app_api.h`'de "ours/theirs" ile dosyayı komple almak.** Alanlar kayar,
   uygulama yanlış adresi çağırır; genelde reset/çökme olarak görünür.
