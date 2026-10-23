@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# app_api.h hızlı sentaks kontrolü (gcc, Windows'ta WSL içinden).
+# app_api.h doğrulama (gcc, Windows'ta WSL içinden).
 #
 #   wsl -e bash tools/check-api-header.sh [repo-koku]
 #
-# Host derleyici 64-bit olduğu için _Static_assert offset kontrolleri devre dışı
-# bırakılır; burada amaç yalnızca merge sonrası bozulmuş C sözdizimini
-# (eksik parantez, yarım kalmış struct, çakışma artığı) yakalamaktır.
-# Offset/boyut doğrulaması gerçek ARM derlemesinde (Docker/CI) yapılır.
+# 1) Derleyici -m32 destekliyorsa gerçek 32-bit yerleşimle derler: bu durumda
+#    app_api.h içindeki _Static_assert offset/boyut kontrolleri de çalışır.
+# 2) -m32 desteklenmiyorsa yalnızca sentaks kontrolü yapar ve uyarır; offset
+#    doğrulaması için gerçek ARM derlemesi (Docker/CI) gerekir.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -45,6 +45,24 @@ typedef unsigned long size_t;
 #endif
 EOF
 
+# Gerçek assert'lerle probe: 32-bit hedefte offsetler ve boyut doğrulanır.
+cat > "$F/probe.c" <<'EOF'
+#include "app_api.h"
+int probe(void) { return (int)sizeof(app_api_t); }
+EOF
+
+if gcc -m32 -fsyntax-only -nostdinc -I"$F" -I"$ROOT/App/apps" "$F/probe.c" 2>"$F/err32"; then
+    echo "OK (32-bit): $ROOT/App/apps/app_api.h - offset/boyut assertleri gecti"
+    exit 0
+fi
+
+if grep -qi "assertion failed" "$F/err32"; then
+    echo "HATA: app_api.h offset/boyut asserti basarisiz:" >&2
+    cat "$F/err32" >&2
+    exit 1
+fi
+
+# -m32 bu ortamda yok: sentaks kontrolüne düş (assertler kapatılır).
 cat > "$F/probe.c" <<'EOF'
 #define _Static_assert(...)
 #include "app_api.h"
@@ -52,4 +70,5 @@ int probe(void) { return (int)sizeof(app_api_t); }
 EOF
 
 gcc -fsyntax-only -nostdinc -I"$F" -I"$ROOT/App/apps" "$F/probe.c"
-echo "OK: $ROOT/App/apps/app_api.h"
+echo "OK (syntax only): $ROOT/App/apps/app_api.h"
+echo "UYARI: bu ortamda -m32 yok; offset/boyut assertleri dogrulanmadi." >&2

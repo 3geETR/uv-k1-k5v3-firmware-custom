@@ -481,19 +481,22 @@ enum { APP_SERIAL_USB = 0, APP_SERIAL_KPLUG = 1 };
 _Static_assert(offsetof(app_api_t, sys_edition) == 276u &&
                offsetof(app_api_t, append_i32) == 328u,
                "the level 2 API prefix must stay 328 bytes");
+/* The level-3 prefix keeps armel's offsets exactly; only new levels may follow. */
 _Static_assert(offsetof(app_api_t, handoff) == 356u &&
                offsetof(app_api_t, tx_prepare) == 364u &&
                offsetof(app_api_t, serial_read) == 368u &&
                offsetof(app_api_t, blit_page) == 380u &&
-               offsetof(app_api_t, vfo_stage) == 392u &&
-               sizeof(app_api_t) == 396u,
+               offsetof(app_api_t, vfo_stage) == 392u,
                "app_api_t is append-only: every edition shares this layout");
 
-/* Level 4 (Sat Track) is appended after the frozen level-3 layout. */
+/* Level 4 (Sat Track) is appended after the frozen level-3 layout, so the
+ * struct is 396 + 44 bytes (11 function pointers). */
 _Static_assert(offsetof(app_api_t, crc16) == 396u &&
+               offsetof(app_api_t, format) == 400u &&
                offsetof(app_api_t, sat_read) == 404u &&
+               offsetof(app_api_t, sat_power) == 436u &&
                sizeof(app_api_t) == 440u,
-               "the level 3 API prefix must stay 396 bytes");
+               "the Sat Track bridge must stay after the level-3 layout");
 
 /* Wrap-safe modular ordering for deadlines less than half a cycle-counter
  * period away (~44.7 s at 48 MHz). Unused helpers emit no application code. */

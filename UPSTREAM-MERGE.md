@@ -88,6 +88,12 @@ servisleri sabit bayt ofsetleriyle çağırır. Bu yüzden:
 4. `APP_API_LEVEL` değerini armel'in seviyesinin **bir fazlası** yap.
 5. `_Static_assert` offset'lerini güncelle.
 
+> **Tuzak:** armel'in assert bloğu `sizeof(app_api_t) == 396u` ile biter. Sat
+> bloğunu eklediğinde yapı 440 bayt olur; bu satırı **olduğu gibi bırakırsan
+> derleme `action.c` içinde "static assertion failed" ile durur.** armel'in
+> bloğunda yalnızca alan offset'lerini bırak, `sizeof` kontrolünü yeni level-4
+> assert'ine taşı (aşağıdaki gibi).
+
 Mevcut durum (v6.3.0 merge'i sonrası):
 
 | Öğe | Değer |
@@ -111,9 +117,18 @@ Sat bloğu 11 pointer'dır (`crc16`, `format`, `sat_read`, `sat_enter`, `sat_tun
     /* sat bloğu buradan sonra */
     uint16_t (*crc16)(const void *buf, uint16_t len);
 ...
-_Static_assert(offsetof(app_api_t, crc16) == <armel sizeof> &&
-               sizeof(app_api_t) == <armel sizeof + 44>,
-               "sat bridge must stay appended");
+/* armel'in bloğunda sizeof(...) satırı KALMAZ, sadece alan offset'leri: */
+_Static_assert(offsetof(app_api_t, handoff) == 356u &&
+               ...
+               offsetof(app_api_t, vfo_stage) == 392u,
+               "level 3 prefix offsets must not move");
+
+/* boyut kontrolü sat bloğunun sonunda: */
+_Static_assert(offsetof(app_api_t, crc16) == 396u &&
+               offsetof(app_api_t, sat_read) == 404u &&
+               offsetof(app_api_t, sat_power) == 436u &&
+               sizeof(app_api_t) == 440u,
+               "the Sat Track bridge must stay after the level-3 layout");
 ```
 
 > `APP_ABI_MAJOR` yalnızca köklü/uyumsuz bir ABI değişikliğinde artırılır;
@@ -219,9 +234,10 @@ python -c "import re;f='App/app/uart.c';n=sum(1 for l in open(f) if re.match(r'\
 wsl -e bash tools/check-api-header.sh
 ```
 
-> Bu script yalnızca C sentaksını kontrol eder; host derleyici 64-bit olduğu için
-> `_Static_assert` offset'lerini devre dışı bırakır. Offset kontrolü gerçek ARM
-> derlemesinde (Docker/CI) yapılır.
+> Bu script önce `-m32` ile derlemeyi dener: başarılıysa `app_api.h` içindeki
+> `_Static_assert` offset/boyut kontrolleri **gerçekten** çalışır. `-m32` yoksa
+> yalnızca sentaks kontrolü yapar ve uyarır; o durumda offset doğrulaması için
+> gerçek ARM derlemesi (Docker/CI) şarttır.
 
 ### 5.2 Gerçek derleme
 
